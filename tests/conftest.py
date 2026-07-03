@@ -8,6 +8,23 @@ from collections.abc import Callable
 import httpx
 import pytest
 
+MINIMAL_JATS = b"""<?xml version='1.0'?>
+<article xmlns:xlink="http://www.w3.org/1999/xlink">
+  <front>
+    <article-meta>
+      <title-group><article-title>A short paper</article-title></title-group>
+      <abstract><p>One sentence abstract.</p></abstract>
+    </article-meta>
+  </front>
+  <body>
+    <sec>
+      <title>Intro</title>
+      <p>Hello world.</p>
+    </sec>
+  </body>
+</article>
+"""
+
 
 class RecordingTransport(httpx.AsyncBaseTransport):
     """Drive a scripted sequence of responses keyed by ``METHOD path``."""

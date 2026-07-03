@@ -1,12 +1,14 @@
 """Identifier resolvers: enrich an :class:`~litfetch.ids.ArticleIds` bundle.
 
-A resolver is any async callable ``ArticleIds -> ArticleIds`` (the
-:data:`Resolver` alias).  It takes what is known and returns a bundle filled
+A resolver is any async callable ``(ArticleIds, Http) -> ArticleIds`` (the
+:data:`Resolver` alias).  It takes what is known and the
+:class:`~litfetch._http.Http` to issue requests on, and returns a bundle filled
 with whatever more it could find; it must never overwrite a known identifier
 (use :meth:`~litfetch.ids.ArticleIds.merge`).  Resolvers are usable on their
 own as a cross-reference toolkit, independent of the fetch ladder::
 
-    ids = await SemanticScholarResolver()(ArticleIds(doi='10.1016/...'))
+    async with litfetch.Session() as s:
+        ids = await SemanticScholarResolver()(ArticleIds(doi='10.1016/...'), s)
     print(ids.pmcid)
 
 The bundled resolvers are general (no pubmedifier coupling): Europe PMC search,
@@ -22,19 +24,17 @@ from collections.abc import Awaitable, Callable, Mapping
 
 import httpx
 
-from litfetch._http import DEFAULT_TIMEOUT, USER_AGENT, client_ctx
-from litfetch.ids import ArticleIds
+from litfetch import _http, ids, semantic_scholar
 
 logger = logging.getLogger(__name__)
 
 _CONTACT_EMAIL = 'toby.sargeant@populationgenomics.org.au'
 _EUROPE_PMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
-_NCBI_IDCONV_BASE = 'https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/'
-_S2_PAPER_BASE = 'https://api.semanticscholar.org/graph/v1/paper'
+_NCBI_IDCONV_BASE = 'https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/'
 
-# A resolver enriches a bundle: it returns a (possibly) fuller ArticleIds and
-# preserves every identifier it was given.
-Resolver = Callable[[ArticleIds], Awaitable[ArticleIds]]
+# A resolver enriches a bundle: given the known ids and an Http, it returns a
+# (possibly) fuller ArticleIds and preserves every identifier it was given.
+Resolver = Callable[[ids.ArticleIds, _http.Http], Awaitable[ids.ArticleIds]]
 
 
 def _pmcid_with_prefix(value: str | None) -> str | None:
@@ -48,15 +48,16 @@ def _pmcid_with_prefix(value: str | None) -> str | None:
 
 
 async def _get_json(
-    c: httpx.AsyncClient,
+    http: _http.Http,
     url: str,
     *,
     params: Mapping[str, str | int],
     context: str,
+    rate: _http.Rate = _http.Rate.DEFAULT,
 ) -> dict | None:
     """GET ``url`` and parse JSON, logging and swallowing transport errors."""
     try:
-        resp = await c.get(url, params=params, headers={'User-Agent': USER_AGENT})
+        resp = await http.get(url, params=params, rate=rate)
     except httpx.HTTPError:
         logger.exception('%s request failed', context)
         return None
@@ -76,28 +77,23 @@ class EuropePmcResolver:
     when the bundle already has a ``pmcid`` or has no ``pmid``.
     """
 
-    def __init__(self, *, http_client: httpx.AsyncClient | None = None, timeout: float = DEFAULT_TIMEOUT) -> None:
-        self._http_client = http_client
-        self._timeout = timeout
-
-    async def __call__(self, ids: ArticleIds) -> ArticleIds:
-        """Return ``ids`` enriched with a ``pmcid`` where Europe PMC has one."""
-        if ids.pmcid or not ids.pmid:
-            return ids
+    async def __call__(self, article_ids: ids.ArticleIds, http: _http.Http) -> ids.ArticleIds:
+        """Return ``article_ids`` enriched with a ``pmcid`` where Europe PMC has one."""
+        if article_ids.pmcid or not article_ids.pmid:
+            return article_ids
         params = {
-            'query': f'EXT_ID:{ids.pmid} AND SRC:MED',
+            'query': f'EXT_ID:{article_ids.pmid} AND SRC:MED',
             'format': 'json',
             'pageSize': 1,
             'resultType': 'lite',
         }
-        async with client_ctx(self._http_client, timeout=self._timeout) as c:
-            data = await _get_json(c, f'{_EUROPE_PMC_BASE}/search', params=params, context='Europe PMC search')
+        data = await _get_json(http, f'{_EUROPE_PMC_BASE}/search', params=params, context='Europe PMC search')
         if data is None:
-            return ids
+            return article_ids
         records = data.get('resultList', {}).get('result', [])
         if not records:
-            return ids
-        return ids.merge(ArticleIds(pmcid=_pmcid_with_prefix(records[0].get('pmcid'))))
+            return article_ids
+        return article_ids.merge(ids.ArticleIds(pmcid=_pmcid_with_prefix(records[0].get('pmcid'))))
 
 
 class NcbiIdConverterResolver:
@@ -108,24 +104,15 @@ class NcbiIdConverterResolver:
     policy.  A no-op when the bundle carries none of the three.
     """
 
-    def __init__(
-        self,
-        *,
-        tool: str = 'litfetch',
-        email: str = _CONTACT_EMAIL,
-        http_client: httpx.AsyncClient | None = None,
-        timeout: float = DEFAULT_TIMEOUT,
-    ) -> None:
+    def __init__(self, *, tool: str = 'litfetch', email: str = _CONTACT_EMAIL) -> None:
         self._tool = tool
         self._email = email
-        self._http_client = http_client
-        self._timeout = timeout
 
-    async def __call__(self, ids: ArticleIds) -> ArticleIds:
-        """Return ``ids`` enriched with whatever the ID Converter maps."""
-        query = _idconv_query(ids)
+    async def __call__(self, article_ids: ids.ArticleIds, http: _http.Http) -> ids.ArticleIds:
+        """Return ``article_ids`` enriched with whatever the ID Converter maps."""
+        query = _idconv_query(article_ids)
         if query is None:
-            return ids
+            return article_ids
         identifier, idtype = query
         params = {
             'ids': identifier,
@@ -134,17 +121,19 @@ class NcbiIdConverterResolver:
             'tool': self._tool,
             'email': self._email,
         }
-        async with client_ctx(self._http_client, timeout=self._timeout) as c:
-            data = await _get_json(c, _NCBI_IDCONV_BASE, params=params, context='NCBI ID Converter')
+        data = await _get_json(
+            http, _NCBI_IDCONV_BASE, params=params, context='NCBI ID Converter', rate=_http.Rate.NCBI_UNKEYED
+        )
         if data is None:
-            return ids
+            return article_ids
         records = data.get('records', [])
         if not records or records[0].get('status') == 'error':
-            return ids
+            return article_ids
         rec = records[0]
-        return ids.merge(
-            ArticleIds(
-                pmid=rec.get('pmid') or None,
+        return article_ids.merge(
+            ids.ArticleIds(
+                # The migrated endpoint returns pmid as an int; ArticleIds holds strings.
+                pmid=(str(rec['pmid']) if rec.get('pmid') else None),
                 pmcid=_pmcid_with_prefix(rec.get('pmcid')),
                 doi=rec.get('doi') or None,
             )
@@ -159,43 +148,17 @@ class SemanticScholarResolver:
     A no-op when the bundle carries no identifier S2 can key on.
     """
 
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        http_client: httpx.AsyncClient | None = None,
-        timeout: float = DEFAULT_TIMEOUT,
-    ) -> None:
+    def __init__(self, *, api_key: str | None = None) -> None:
         self._api_key = api_key
-        self._http_client = http_client
-        self._timeout = timeout
 
-    async def __call__(self, ids: ArticleIds) -> ArticleIds:
-        """Return ``ids`` enriched from Semantic Scholar's external ids."""
-        paper_id = _s2_paper_id(ids)
-        if paper_id is None:
-            return ids
-        headers = {'User-Agent': USER_AGENT}
-        if self._api_key:
-            headers['x-api-key'] = self._api_key
-        async with client_ctx(self._http_client, timeout=self._timeout) as c:
-            try:
-                resp = await c.get(
-                    f'{_S2_PAPER_BASE}/{paper_id}',
-                    params={'fields': 'externalIds'},
-                    headers=headers,
-                )
-            except httpx.HTTPError:
-                logger.exception('Semantic Scholar request failed')
-                return ids
-        if resp.status_code != 200:
-            return ids
-        try:
-            external = resp.json().get('externalIds') or {}
-        except ValueError:
-            return ids
-        return ids.merge(
-            ArticleIds(
+    async def __call__(self, article_ids: ids.ArticleIds, http: _http.Http) -> ids.ArticleIds:
+        """Return ``article_ids`` enriched from Semantic Scholar's external ids."""
+        data = await semantic_scholar.fetch_paper(article_ids, http=http, fields='externalIds', api_key=self._api_key)
+        if data is None:
+            return article_ids
+        external = data.get('externalIds') or {}
+        return article_ids.merge(
+            ids.ArticleIds(
                 pmid=(str(external['PubMed']) if external.get('PubMed') else None),
                 pmcid=_pmcid_with_prefix(external.get('PubMedCentral')),
                 doi=external.get('DOI') or None,
@@ -211,12 +174,12 @@ def chain(*resolvers: Resolver) -> Resolver:
     only while there is still something to find.
     """
 
-    async def _run(ids: ArticleIds) -> ArticleIds:
+    async def _run(article_ids: ids.ArticleIds, http: _http.Http) -> ids.ArticleIds:
         for resolver in resolvers:
-            if ids.pmid and ids.pmcid and ids.doi:
+            if article_ids.pmid and article_ids.pmcid and article_ids.doi:
                 break
-            ids = ids.merge(await resolver(ids))
-        return ids
+            article_ids = article_ids.merge(await resolver(article_ids, http))
+        return article_ids
 
     return _run
 
@@ -232,23 +195,12 @@ def default_resolver() -> Resolver:
     return chain(EuropePmcResolver(), NcbiIdConverterResolver())
 
 
-def _idconv_query(ids: ArticleIds) -> tuple[str, str] | None:
+def _idconv_query(article_ids: ids.ArticleIds) -> tuple[str, str] | None:
     """Pick the identifier and ``idtype`` to send to NCBI's ID Converter."""
-    if ids.pmid:
-        return ids.pmid, 'pmid'
-    if ids.pmcid:
-        return ids.pmcid, 'pmcid'
-    if ids.doi:
-        return ids.doi, 'doi'
-    return None
-
-
-def _s2_paper_id(ids: ArticleIds) -> str | None:
-    """Build a Semantic Scholar paper id from the most specific id available."""
-    if ids.doi:
-        return f'DOI:{ids.doi}'
-    if ids.pmid:
-        return f'PMID:{ids.pmid}'
-    if ids.pmcid:
-        return f'PMCID:{ids.pmcid}'
+    if article_ids.pmid:
+        return article_ids.pmid, 'pmid'
+    if article_ids.pmcid:
+        return article_ids.pmcid, 'pmcid'
+    if article_ids.doi:
+        return article_ids.doi, 'doi'
     return None

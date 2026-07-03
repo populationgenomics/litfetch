@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterable
-from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class ArticleIds:
     """An immutable bundle of the identifiers litfetch can act on.
 
@@ -15,6 +15,11 @@ class ArticleIds:
     sources consume whichever identifier they declare in ``requires``.
     """
 
+    # Deliberately a thin record.  The priority orders callers apply over these
+    # fields (canonical_key prefers doi; NCBI idconv prefers pmid; S2 prefers
+    # doi) are independent caller policy, not a domain ordering -- there is no
+    # single intrinsic specificity ranking -- so they stay at the call sites
+    # rather than being centralised here behind a generic picker.
     pmid: str | None = None
     pmcid: str | None = None
     doi: str | None = None
