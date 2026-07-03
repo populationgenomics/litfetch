@@ -71,13 +71,14 @@ if blob:
 
 ### Inject your own resolver
 
-A resolver is just an async `ArticleIds -> ArticleIds`. Enrich from whatever you
-have — a corpus client, a local cache, an API — and `merge` it in:
+A resolver is an async `(ArticleIds, Http) -> ArticleIds` — the session running
+it supplies the `Http`. Enrich from whatever you have — a corpus client, a local
+cache, an API — and `merge` it in (this one ignores `Http`, hence `_http`):
 
 ```python
-from litfetch import ArticleIds, fetch_body
+from litfetch import ArticleIds, Http, fetch_body
 
-async def my_resolver(ids: ArticleIds) -> ArticleIds:
+async def my_resolver(ids: ArticleIds, _http: Http) -> ArticleIds:
     if not ids.pmid:
         return ids
     pmcid, doi = await my_corpus.lookup(ids.pmid)

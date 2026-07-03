@@ -174,6 +174,11 @@ class FileSource(Protocol):
 | `CrossrefFileSource()` | `crossref_tdm` | `doi` | text-mining `link[]` (PDF + XML) as `BODY` renditions, `media_type` from `content-type` |
 | `SpringerFileSource()` | `springer` | `doi` + `springer_meta_api_key` | the Springer openURL PDF as a `BODY` `application/pdf` `File` |
 
+`PmcOaFetcher` appears here as well as in the fetcher ladder — one class
+implementing both `Fetcher` and `FileSource`, because the PMC OA bucket serves
+the body *and* enumerates the file-set from the same S3 prefix. There is no
+separate `PmcOaFileSource`.
+
 A discovered PDF surfaces in the file-set as a `BODY` rendition
 (`media_type='application/pdf'`) — never through `fetch_body`, which stays
 XML-only. `UnpaywallFileSource` reuses the same DOI-keyed record as
@@ -241,7 +246,7 @@ EuropePmcResolver()
 
 NcbiIdConverterResolver(*, tool='litfetch', email=<contact>)
 # any of pmid/pmcid/doi cross-referenced via NCBI ID Converter; tool + email
-# identify the caller per NCBI policy. Paced at NCBI's keyless rate.
+# identify the caller per NCBI policy. Always keyless -- no keyed variant.
 
 SemanticScholarResolver(*, api_key=None)
 # identifiers cross-referenced via Semantic Scholar's externalIds endpoint;
@@ -392,7 +397,8 @@ file leaves `credential_key` `None`.
 `litfetch.serde` maps the data types to/from JSON-able `dict`s so a consumer can
 persist a file-set in its own store. litfetch owns the *structure*, not the wire
 format or storage. Each type has a `*_to_dict` / `*_from_dict` pair:
-`article_ids`, `file`, `source_metadata`.
+`article_ids`, `file`, `source_metadata`. These live in `litfetch.serde` and are
+not re-exported at the top level — reach them via `from litfetch import serde`.
 
 ## Sessions and HTTP
 
@@ -485,8 +491,8 @@ class Rate(enum.Enum):
     DEFAULT       # no throttle (S3, publisher CDNs)
     NCBI_UNKEYED  # ~3 req/s
     NCBI_KEYED    # ~10 req/s
-    S2_UNKEYED    # Semantic Scholar public pool
-    S2_KEYED
+    S2_UNKEYED    # ~1 req/s (Semantic Scholar public pool)
+    S2_KEYED      # ~10 req/s
 ```
 
 A named politeness rate chosen at the call site (key-presence decides
@@ -513,4 +519,6 @@ backoff, capped at `max_delay`. Lives in `litfetch._http`; pass a custom one via
 Outbound requests carry a `User-Agent` of `litfetch/<version> (mailto:<contact>)`
 (set by the default `client_factory`), and NCBI/Crossref/Unpaywall/bioRxiv calls
 pass a contact email per those services' usage policies. The default contact is
-the maintainer's; override it where a signature exposes `email=`.
+the maintainer's; override it at the two public sites that expose `email=` —
+`resolve_access` and `NcbiIdConverterResolver` (and `UnpaywallFileSource`, though
+it is rarely constructed directly).
