@@ -62,13 +62,18 @@ async def related_ids(article_ids: ids.ArticleIds, *, http: _http.Http) -> tuple
     doi = article_ids.doi
     if not doi:
         return ()
+    # DOIs are case-insensitive, so dedupe on a case-folded key (keeping the
+    # first-seen original casing) -- else bioRxiv and Crossref reporting the same
+    # DOI in different case would both survive.
     found: dict[tuple[RelationType, str], Related] = {}
     if doi.startswith(_PREPRINT_DOI_PREFIXES):
         published = await _biorxiv_published(http, doi)
         if published:
-            found[(RelationType.PUBLISHED, published)] = Related(RelationType.PUBLISHED, ids.ArticleIds(doi=published))
+            found[(RelationType.PUBLISHED, published.casefold())] = Related(
+                RelationType.PUBLISHED, ids.ArticleIds(doi=published)
+            )
     for relation, linked in await _crossref_relations(http, doi):
-        found.setdefault((relation, linked), Related(relation, ids.ArticleIds(doi=linked)))
+        found.setdefault((relation, linked.casefold()), Related(relation, ids.ArticleIds(doi=linked)))
     return tuple(found.values())
 
 

@@ -167,6 +167,13 @@ async def test_scope_does_not_cache_transient_status() -> None:
     assert calls == ['https://x/', 'https://x/']
 
 
+async def test_scope_requires_parent_entered() -> None:
+    session = sessions.Session(client_factory=_factory([]))
+    with pytest.raises(RuntimeError, match='enter the parent session before entering its scope'):
+        async with session.scope():
+            pass
+
+
 async def test_scope_cache_is_dropped_on_exit() -> None:
     calls: list[str] = []
     async with sessions.Session(client_factory=_factory(calls)) as session:

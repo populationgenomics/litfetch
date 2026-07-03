@@ -113,6 +113,12 @@ class RetryPolicy:
     base_delay: float = 0.5
     max_delay: float = 8.0
 
+    def __post_init__(self) -> None:
+        # >= 1 so the get() loop always runs at least once (0 would fall through
+        # to its `unreachable` guard).
+        if self.max_attempts < 1:
+            raise ValueError(f'max_attempts must be >= 1, got {self.max_attempts}')
+
 
 DEFAULT_RETRY = RetryPolicy()
 

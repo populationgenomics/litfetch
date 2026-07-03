@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import re
 import urllib.parse
 from collections.abc import Mapping
 from typing import Protocol
@@ -227,11 +228,13 @@ def _extract_jats_article(content: bytes) -> bytes | None:
     entity-declaring DOCTYPE.  Body presence is the gate, not an OA flag,
     matching the Elsevier path; returns ``None`` for a non-OA/absent article.
     """
-    start = content.find(b'<article')
+    # Anchor on `<article` followed by whitespace or `>` so a wrapper element
+    # like `<article-set>` (or `<article-meta>`) can't be mistaken for the root.
+    opening = re.search(rb'<article[\s>]', content)
     end = content.rfind(b'</article>')
-    if start == -1 or end < start:
+    if opening is None or end < opening.start():
         return None
-    article = content[start : end + len(b'</article>')]
+    article = content[opening.start() : end + len(b'</article>')]
     if b'<body' not in article:
         return None
     return b"<?xml version='1.0' encoding='UTF-8'?>\n" + article

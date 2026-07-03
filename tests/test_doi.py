@@ -49,10 +49,24 @@ def test_normalize_rejects_invalid(raw: str) -> None:
         ('10.1/a/b c', '10.1/a/b%20c'),
         # A CC URL as a suffix (real Crossref DOIs do this) is fully encoded.
         ('10.1/S0140-6736(20)30183-5', '10.1/S0140-6736%2820%2930183-5'),
+        # A classic Wiley SICI-style DOI: angle brackets, colons, semicolons all
+        # reserved characters that must not reach the URL raw.
+        (
+            '10.1002/1521-3773(20010316)40:6<9999::AID-ANIE9999>3.0.CO;2-A',
+            '10.1002/1521-3773%2820010316%2940%3A6%3C9999%3A%3AAID-ANIE9999%3E3.0.CO%3B2-A',
+        ),
     ],
 )
 def test_encode_percent_encodes_segments(raw: str, expected: str) -> None:
     assert _doi.encode_doi_path(raw) == expected
+
+
+def test_encode_leaves_only_the_registrant_suffix_separator() -> None:
+    """No reserved character survives except the single structural ``/``."""
+    encoded = _doi.encode_doi_path('10.1002/1521-3773(20010316)40:6<9999>3.0.CO;2-A')
+    assert encoded.count('/') == 1
+    for reserved in ('(', ')', '<', '>', ':', ';'):
+        assert reserved not in encoded
 
 
 @pytest.mark.parametrize('raw', ['10.1/../secret', '10.1/./x', '10.1/a/../b'])

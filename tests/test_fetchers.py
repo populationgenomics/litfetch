@@ -423,6 +423,22 @@ async def test_springer_returns_none_without_article_body(patch_transport: conft
     assert await _fetch(fetchers.SpringerFetcher(), ids.ArticleIds(doi=_DOI), credentials=_SPRINGER_CREDS) is None
 
 
+def test_extract_jats_article_skips_wrapper_elements() -> None:
+    # The anchor must land on the real <article> root, not a `<article-set>`/
+    # `<article-meta>` wrapper that shares its prefix.
+    content = (
+        b'<response><records><article-set>'
+        b'<article dtd-version="1.2"><front><article-meta/></front>'
+        b'<body><sec><p>x</p></sec></body></article>'
+        b'</article-set></records></response>'
+    )
+    extracted = fetchers._extract_jats_article(content)
+    assert extracted is not None
+    assert b'<article-set' not in extracted
+    assert b'<article ' in extracted
+    assert b'<body' in extracted
+
+
 # --- file-set listing + fetching -----------------------------------------
 
 # The .xml/.pdf are stem renditions (BODY); figure1.jpg and data.csv are genuine

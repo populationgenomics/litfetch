@@ -130,7 +130,16 @@ class Session:
         self._cache = {}
 
     async def __aenter__(self) -> Session:  # noqa: PYI034 -- Self needs py311; project targets py310
-        self._client = self._parent.client if self._parent is not None else self._factory()
+        if self._parent is None:
+            self._client = self._factory()
+            return self
+        # A scope shares the parent's client; the parent must already be entered.
+        # Its `client` property raises when it is not -- re-raise with the message
+        # that names the actual mistake.
+        try:
+            self._client = self._parent.client
+        except RuntimeError as e:
+            raise RuntimeError('enter the parent session before entering its scope()') from e
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -321,10 +330,12 @@ async def resolve_access(
 ) -> artifacts.SourceMetadata:
     """One-shot :meth:`Session.resolve_access`: opens an ephemeral session for this call.
 
-    Unpaywall requires an ``email``; without one the lookup is skipped.
+    ``email`` is the Unpaywall identity (Unpaywall requires it; without one the
+    lookup is skipped). It is passed only to Unpaywall, not promoted to the
+    session ``contact``/User-Agent -- hold a :class:`Session` for that.
     """
-    async with Session(contact=email) as session:
-        return await session.resolve_access(article_ids)
+    async with Session() as session:
+        return await session.resolve_access(article_ids, email=email)
 
 
 async def related_ids(article_ids: ids.ArticleIds) -> tuple[relations.Related, ...]:

@@ -88,6 +88,12 @@ async def test_max_attempts_one_disables_retry() -> None:
     assert script.calls == 1
 
 
+@pytest.mark.parametrize('max_attempts', [0, -1])
+def test_retry_policy_rejects_non_positive_attempts(max_attempts: int) -> None:
+    with pytest.raises(ValueError, match='max_attempts must be >= 1'):
+        _http.RetryPolicy(max_attempts=max_attempts)
+
+
 @pytest.mark.parametrize(
     ('header', 'expected'),
     [({'Retry-After': '5'}, 5.0), ({'Retry-After': 'Wed, 21 Oct 2015 07:28:00 GMT'}, None), ({}, None)],

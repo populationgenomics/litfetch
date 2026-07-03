@@ -56,5 +56,24 @@ async def test_related_ids_dedupes_biorxiv_and_crossref(patch_transport: conftes
     assert related[0].ids.doi == _PUB
 
 
+async def test_related_ids_dedupes_across_case(patch_transport: conftest.InstallTransport) -> None:
+    # bioRxiv and Crossref name the same published DOI in different case; DOIs are
+    # case-insensitive, so this is one entry, keeping bioRxiv's first-seen casing.
+    patch_transport(
+        {
+            f'GET /details/biorxiv/{_PRE}': [httpx.Response(200, json={'collection': [{'published': _PUB}]})],
+            f'GET /works/{_PRE}': [
+                httpx.Response(
+                    200,
+                    json={'message': {'relation': {'is-preprint-of': [{'id': _PUB.upper(), 'id-type': 'doi'}]}}},
+                )
+            ],
+        }
+    )
+    related = await sessions.related_ids(ids.ArticleIds(doi=_PRE))
+    assert len(related) == 1
+    assert related[0].ids.doi == _PUB
+
+
 async def test_related_ids_noop_without_doi() -> None:
     assert await sessions.related_ids(ids.ArticleIds(pmid='1')) == ()
