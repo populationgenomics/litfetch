@@ -11,18 +11,24 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+from typing import Final
 
 # Well-known media types an artifact can carry: the JATS or Elsevier body
-# dialects, or a PDF rendition.
-JATS_XML = 'application/jats+xml'
-ELSEVIER_XML = 'application/vnd.elsevier+xml'
-PDF = 'application/pdf'
+# dialects, or a PDF rendition.  Left as open ``str`` (not an enum): a File's
+# media_type is an open domain -- Crossref/publisher links carry arbitrary
+# content-types -- so a closed enum would be wrong.  The closed sets in this
+# package (FileKind, Rate, RelationType) are enums; these are not.
+JATS_XML: Final[str] = 'application/jats+xml'
+ELSEVIER_XML: Final[str] = 'application/vnd.elsevier+xml'
+PDF: Final[str] = 'application/pdf'
 
 # A ``File.credential_key`` value meaning the fetch needs *institutional
 # entitlement* (a subscription reached via an EZproxy-style client), rather than
-# a key in the ``credentials`` map.  The consumer routes such a file through its
+# a key in the ``credentials`` map.  The ``litfetch:`` prefix makes it
+# un-collidable with a user-supplied credentials key (which could otherwise be
+# literally ``institutional``).  The consumer routes such a file through its
 # entitled client; an openly-fetchable file leaves ``credential_key`` ``None``.
-INSTITUTIONAL = 'institutional'
+INSTITUTIONAL: Final[str] = 'litfetch:institutional'
 
 
 class FileKind(enum.Enum):

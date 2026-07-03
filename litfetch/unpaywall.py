@@ -54,4 +54,5 @@ async def fetch_record(
     try:
         return resp.json()
     except ValueError:
+        logger.warning('Unpaywall returned a non-JSON response for %s', article_ids.doi)
         return None

@@ -47,4 +47,5 @@ async def fetch_work(doi: str, *, http: _http.Http, mailto: str | None = None) -
     try:
         return resp.json().get('message')
     except ValueError:
+        logger.warning('Crossref returned a non-JSON response for %s', doi)
         return None

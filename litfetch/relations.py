@@ -86,6 +86,7 @@ async def _biorxiv_published(http: _http.Http, doi: str) -> str | None:
         try:
             collection = resp.json().get('collection') or []
         except ValueError:
+            logger.warning('bioRxiv details returned a non-JSON response for %s', url)
             continue
         if collection:
             published = collection[-1].get('published')

@@ -67,4 +67,5 @@ async def fetch_paper(
     try:
         return resp.json()
     except ValueError:
+        logger.warning('Semantic Scholar returned a non-JSON response for %s', pid)
         return None

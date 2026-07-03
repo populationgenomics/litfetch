@@ -65,6 +65,7 @@ async def _get_json(
     try:
         return resp.json()
     except ValueError:
+        logger.warning('%s returned a non-JSON response', context)
         return None
 
 

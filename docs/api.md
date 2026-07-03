@@ -386,7 +386,8 @@ A fetcher whose credential is absent simply declines (returns `None`); it is not
 an error.
 
 **`INSTITUTIONAL` marker.** A `File.credential_key` is normally a key in this
-map. The exception is `litfetch.INSTITUTIONAL` (`'institutional'`): it marks a
+map. The exception is `litfetch.INSTITUTIONAL` (`'litfetch:institutional'` — the
+`litfetch:` prefix keeps it from colliding with a user credentials key): it marks a
 file that needs *institutional entitlement* — a subscription reached through an
 EZproxy-style client — rather than a map key. `SpringerFileSource` sets it on a
 non-OA article's PDF. The consumer routes such a file through its entitled

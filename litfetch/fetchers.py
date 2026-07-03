@@ -597,6 +597,7 @@ class BiorxivFetcher:
             try:
                 collection = resp.json().get('collection') or []
             except ValueError:
+                logger.warning('bioRxiv details returned a non-JSON response for %s', url)
                 continue
             if collection and collection[-1].get('jatsxml'):
                 return collection[-1]['jatsxml']
@@ -784,6 +785,7 @@ async def _springer_meta_pdf(http: _http.Http, doi: str, api_key: str) -> tuple[
     try:
         records = resp.json().get('records') or []
     except ValueError:
+        logger.warning('Springer Meta returned a non-JSON response for %s', doi)
         return None
     if not records:
         return None
