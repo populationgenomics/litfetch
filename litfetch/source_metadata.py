@@ -94,7 +94,7 @@ async def resolve_access(
     article_ids: ids.ArticleIds,
     *,
     http: _http.Http,
-    email: str = _http.CONTACT_EMAIL,
+    email: str | None = None,
 ) -> artifacts.SourceMetadata:
     """Resolve a paper's licence / OA status from Unpaywall, keyed on its DOI.
 
@@ -104,7 +104,8 @@ async def resolve_access(
     ``license``, ``access`` from the raw ``oa_status`` -- or an empty one when
     there is no DOI, the lookup fails, or Unpaywall has no record.  ``http`` is
     the :class:`~litfetch._http.Http` to issue the request on; ``email``
-    identifies the caller per Unpaywall's usage policy.
+    identifies the caller per Unpaywall's policy and defaults to the session
+    ``contact`` -- without either, the lookup is skipped (Unpaywall requires it).
     """
     data = await unpaywall.fetch_record(article_ids, http=http, email=email)
     if data is None:

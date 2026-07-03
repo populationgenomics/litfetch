@@ -28,7 +28,6 @@ from litfetch import _http, ids, semantic_scholar
 
 logger = logging.getLogger(__name__)
 
-_CONTACT_EMAIL = 'toby.sargeant@populationgenomics.org.au'
 _EUROPE_PMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
 _NCBI_IDCONV_BASE = 'https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/'
 
@@ -100,13 +99,13 @@ class NcbiIdConverterResolver:
     """Cross-reference ``pmid``/``pmcid``/``doi`` via NCBI's ID Converter.
 
     A single keyless request maps any one of the three identifiers to the
-    others.  ``tool`` and ``email`` identify the caller to NCBI per its usage
-    policy.  A no-op when the bundle carries none of the three.
+    others.  ``tool`` identifies the caller to NCBI; the ``email`` sent with it
+    defaults to the session ``contact`` (``http.contact``) and is omitted when
+    unset.  A no-op when the bundle carries none of the three.
     """
 
-    def __init__(self, *, tool: str = 'litfetch', email: str = _CONTACT_EMAIL) -> None:
+    def __init__(self, *, tool: str = 'litfetch') -> None:
         self._tool = tool
-        self._email = email
 
     async def __call__(self, article_ids: ids.ArticleIds, http: _http.Http) -> ids.ArticleIds:
         """Return ``article_ids`` enriched with whatever the ID Converter maps."""
@@ -114,13 +113,9 @@ class NcbiIdConverterResolver:
         if query is None:
             return article_ids
         identifier, idtype = query
-        params = {
-            'ids': identifier,
-            'idtype': idtype,
-            'format': 'json',
-            'tool': self._tool,
-            'email': self._email,
-        }
+        params = {'ids': identifier, 'idtype': idtype, 'format': 'json', 'tool': self._tool}
+        if http.contact:
+            params['email'] = http.contact
         data = await _get_json(
             http, _NCBI_IDCONV_BASE, params=params, context='NCBI ID Converter', rate=_http.Rate.NCBI_UNKEYED
         )

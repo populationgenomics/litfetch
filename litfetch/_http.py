@@ -25,8 +25,10 @@ from typing import Protocol
 import httpx
 
 DEFAULT_TIMEOUT = 30.0
-CONTACT_EMAIL = 'toby.sargeant@populationgenomics.org.au'
-USER_AGENT = f'litfetch/0.1 (mailto:{CONTACT_EMAIL})'
+# Base User-Agent, no contact. A caller who sets Session(contact=...) gets a
+# `(mailto:...)` appended and that address fed to the polite-pool params; litfetch
+# ships no default contact of its own.
+USER_AGENT = 'litfetch/0.1'
 
 # Status codes worth retrying: 429 (rate limited) and the transient 5xx family.
 # A 4xx other than 429 is the caller's fault and will not fix itself on retry.
@@ -71,9 +73,16 @@ class Http(Protocol):
     """The request surface a source or resolver needs: a paced, retrying GET.
 
     :class:`~litfetch.sessions.Session` satisfies this.  A source is handed an
-    ``Http``, never the Session's lifecycle, so it depends on one method and is
-    trivially faked in a test.
+    ``Http``, never the Session's lifecycle, so it depends on one method (and one
+    attribute) and is trivially faked in a test.
+
+    ``contact`` is the caller-configured identity (an email) for polite-pool
+    parameters -- Unpaywall's required ``email``, Crossref's ``mailto``, NCBI's
+    ``email`` -- and ``None`` when the caller set none; a source reads it rather
+    than carrying a hardcoded address.
     """
+
+    contact: str | None
 
     async def get(
         self,

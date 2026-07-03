@@ -98,12 +98,16 @@ from litfetch import ArticleIds, fetch_body
 from litfetch.resolvers import SemanticScholarResolver, NcbiIdConverterResolver, chain
 
 resolver = chain(
-    my_resolver,                                          # your own
-    SemanticScholarResolver(api_key=S2_KEY),              # bundled
-    NcbiIdConverterResolver(tool='myapp', email='me@x'),  # bundled
+    my_resolver,                              # your own
+    SemanticScholarResolver(api_key=S2_KEY),  # bundled
+    NcbiIdConverterResolver(tool='myapp'),    # bundled
 )
 blob = await fetch_body(ArticleIds(pmid='29622564'), resolver=resolver)
 ```
+
+Polite-pool identification (NCBI/Crossref `email`, Unpaywall's required `email`)
+comes from a session `contact`, not a hardcoded default — set it on the session:
+`async with litfetch.Session(contact='you@example.org') as s: await s.fetch_body(...)`.
 
 `default_resolver()` is a batteries-included, keyless chain
 (Europe PMC search + NCBI ID Converter).

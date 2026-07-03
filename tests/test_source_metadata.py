@@ -86,6 +86,7 @@ def test_source_metadata_round_trips_through_serde() -> None:
 
 _DOI = '10.1/x'
 _UNPAYWALL_PATH = f'/v2/{_DOI}'
+_EMAIL = 'test@example.org'  # Unpaywall requires an email; litfetch ships none
 
 
 async def test_resolve_access_returns_licence_and_oa_status(patch_transport: conftest.InstallTransport) -> None:
@@ -99,7 +100,7 @@ async def test_resolve_access_returns_licence_and_oa_status(patch_transport: con
             ]
         }
     )
-    meta = await sessions.resolve_access(ids.ArticleIds(doi=_DOI))
+    meta = await sessions.resolve_access(ids.ArticleIds(doi=_DOI), email=_EMAIL)
     assert meta.licence == 'cc-by'
     assert meta.access == 'gold'
     assert meta.basis == 'unpaywall'
@@ -113,7 +114,7 @@ async def test_resolve_access_handles_closed_record(patch_transport: conftest.In
             ]
         }
     )
-    meta = await sessions.resolve_access(ids.ArticleIds(doi=_DOI))
+    meta = await sessions.resolve_access(ids.ArticleIds(doi=_DOI), email=_EMAIL)
     assert meta.licence is None
     assert meta.access == 'closed'
     assert meta.basis == 'unpaywall'
@@ -126,4 +127,4 @@ async def test_resolve_access_noop_without_doi() -> None:
 
 async def test_resolve_access_empty_on_not_found(patch_transport: conftest.InstallTransport) -> None:
     patch_transport({f'GET {_UNPAYWALL_PATH}': [httpx.Response(404)]})
-    assert await sessions.resolve_access(ids.ArticleIds(doi=_DOI)) == artifacts.SourceMetadata()
+    assert await sessions.resolve_access(ids.ArticleIds(doi=_DOI), email=_EMAIL) == artifacts.SourceMetadata()

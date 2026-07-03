@@ -611,7 +611,8 @@ class UnpaywallFileSource:
     the record is fetched once).  Lists a single ``application/pdf`` ``BODY``
     :class:`~litfetch.artifacts.File` when the record has a
     ``best_oa_location.url_for_pdf``, empty otherwise.  Needs no credential;
-    ``email`` identifies the caller per Unpaywall's policy.
+    ``email`` identifies the caller per Unpaywall's policy and defaults to the
+    session ``contact`` (Unpaywall requires it -- no email, no listing).
 
     A discovered PDF is an *additional* file-set member, never the goal of the
     XML body ladder (see ``docs/source-expansion-plan.md``).
@@ -619,7 +620,7 @@ class UnpaywallFileSource:
 
     name = 'unpaywall'
 
-    def __init__(self, *, email: str = _http.CONTACT_EMAIL) -> None:
+    def __init__(self, *, email: str | None = None) -> None:
         self._email = email
 
     async def list_files(

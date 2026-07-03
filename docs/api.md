@@ -169,7 +169,7 @@ class FileSource(Protocol):
 | Class | `name` | Needs | Yields |
 | --- | --- | --- | --- |
 | `PmcOaFetcher()` | `pmc_oa_s3` | `pmcid` | JATS/PDF body renditions + supplementary material |
-| `UnpaywallFileSource(*, email=<contact>)` | `unpaywall` | `doi` | the best-OA-location PDF as a `BODY` `application/pdf` `File` |
+| `UnpaywallFileSource(*, email=None)` | `unpaywall` | `doi` + a contact | the best-OA-location PDF as a `BODY` `application/pdf` `File` |
 | `SemanticScholarFileSource()` | `semantic_scholar` | any id | the `openAccessPdf` URL as a `BODY` `application/pdf` `File` |
 | `CrossrefFileSource()` | `crossref_tdm` | `doi` | text-mining `link[]` (PDF + XML) as `BODY` renditions, `media_type` from `content-type` |
 | `SpringerFileSource()` | `springer` | `doi` + `springer_meta_api_key` | the Springer openURL PDF as a `BODY` `application/pdf` `File` |
@@ -244,9 +244,9 @@ when the bundle lacks an identifier it can key on.
 EuropePmcResolver()
 # pmid -> pmcid via the Europe PMC search API.
 
-NcbiIdConverterResolver(*, tool='litfetch', email=<contact>)
-# any of pmid/pmcid/doi cross-referenced via NCBI ID Converter; tool + email
-# identify the caller per NCBI policy. Always keyless -- no keyed variant.
+NcbiIdConverterResolver(*, tool='litfetch')
+# any of pmid/pmcid/doi cross-referenced via NCBI ID Converter; always keyless.
+# tool + the session contact (if any) identify the caller per NCBI policy.
 
 SemanticScholarResolver(*, api_key=None)
 # identifiers cross-referenced via Semantic Scholar's externalIds endpoint;
@@ -282,14 +282,15 @@ parses bytes you already hold.
 async def resolve_access(     # also Session.resolve_access(self, ...)
     article_ids: ArticleIds,
     *,
-    email: str = <contact>,
+    email: str | None = None,
 ) -> SourceMetadata
 ```
 
 Assert the licence / OA status from **Unpaywall**, keyed on the DOI, with
 `basis='unpaywall'` — for a paper whose bytes carry none. Returns an empty
 `SourceMetadata` when there is no DOI, the lookup fails, or Unpaywall has no
-record. `email` identifies the caller per Unpaywall's usage policy.
+record. Unpaywall **requires** an `email`; it defaults to the session `contact`
+and can be overridden here — without either, the lookup is skipped.
 
 ## Relations
 
@@ -418,6 +419,7 @@ class Session:
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
         retry: RetryPolicy = <default>,
         timeout: float = 30.0,
+        contact: str | None = None,
     ) -> None
     async def __aenter__(self) -> Session   # builds the client via client_factory
     async def __aexit__(self, *exc) -> None  # closes it (a scope leaves it open)
@@ -432,7 +434,8 @@ class Session:
 An async context manager. `client_factory` is the injection point for a proxy,
 an institutional EZproxy (see [Institutional access](institutional-access.md)),
 or CA-cert configuration; the default builds a client with a litfetch
-`User-Agent` and `timeout`. `get` paces per `rate` then issues a
+`User-Agent` and `timeout`. `contact` (an email) is the caller's polite-pool
+identity — see [Contact](#contact) below. `get` paces per `rate` then issues a
 retrying GET (see [`RetryPolicy`](#retrypolicy)) — and, inside a `scope`, serves
 a repeat request from cache; `client` exposes the raw `httpx.AsyncClient` for
 what `get` doesn't cover (POST, streaming). `follow_redirects` is off by default
@@ -514,11 +517,21 @@ Governs `Session.get`'s retry of a transport error or a retryable status (429,
 backoff, capped at `max_delay`. Lives in `litfetch._http`; pass a custom one via
 `Session(retry=...)`.
 
-### Contact defaults
+### Contact
 
-Outbound requests carry a `User-Agent` of `litfetch/<version> (mailto:<contact>)`
-(set by the default `client_factory`), and NCBI/Crossref/Unpaywall/bioRxiv calls
-pass a contact email per those services' usage policies. The default contact is
-the maintainer's; override it at the two public sites that expose `email=` —
-`resolve_access` and `NcbiIdConverterResolver` (and `UnpaywallFileSource`, though
-it is rarely constructed directly).
+litfetch ships **no default contact email** — the maintainer's address is not
+baked into the package. Set `Session(contact='you@example.org')` to identify
+your calls; it flows to two places:
+
+- the default `client_factory`'s `User-Agent` — `litfetch/<version>
+  (mailto:<contact>)` (bare `litfetch/<version>` when unset), which Crossref
+  reads for its polite pool;
+- the polite-pool **params** — Unpaywall's required `email`, NCBI's `email` —
+  via `http.contact`, which the sources read at request time.
+
+A `scope` inherits its parent's `contact`. Without a contact: the User-Agent
+carries no `mailto`, NCBI/Crossref omit the param (they still answer, just
+outside the polite pool), and **Unpaywall is skipped** (it requires an email, so
+`resolve_access` and `UnpaywallFileSource` return empty). For a one-shot,
+`resolve_access(..., email=...)` and `UnpaywallFileSource(email=...)` take the
+contact directly.

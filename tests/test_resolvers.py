@@ -15,6 +15,8 @@ _DOI = '10.1016/j.test.2024.01.001'
 class _NoHttp:
     """An Http stub that fails if used -- for resolver tests that make no request."""
 
+    contact: str | None = None
+
     async def get(self, *_args: object, **_kwargs: object) -> httpx.Response:
         raise AssertionError('no request expected')
 

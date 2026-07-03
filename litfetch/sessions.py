@@ -36,11 +36,16 @@ from litfetch import _http, artifacts, ids, relations, resolvers, source_metadat
 from litfetch import fetchers as fetchers_
 
 
-def _default_client_factory(timeout: float) -> Callable[[], httpx.AsyncClient]:
-    """Build the default client factory: a litfetch User-Agent and ``timeout``."""
+def _default_client_factory(timeout: float, contact: str | None) -> Callable[[], httpx.AsyncClient]:
+    """Build the default client factory: a litfetch User-Agent and ``timeout``.
+
+    A ``contact`` (an email) appends ``(mailto:<contact>)`` to the User-Agent for
+    polite-pool identification; ``None`` leaves the bare ``litfetch/<version>``.
+    """
+    user_agent = f'{_http.USER_AGENT} (mailto:{contact})' if contact else _http.USER_AGENT
 
     def factory() -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=timeout, headers={'User-Agent': _http.USER_AGENT})
+        return httpx.AsyncClient(timeout=timeout, headers={'User-Agent': user_agent})
 
     return factory
 
@@ -96,8 +101,10 @@ class Session:
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
         retry: _http.RetryPolicy = _http.DEFAULT_RETRY,
         timeout: float = _http.DEFAULT_TIMEOUT,
+        contact: str | None = None,
     ) -> None:
-        self._factory = client_factory or _default_client_factory(timeout)
+        self.contact = contact
+        self._factory = client_factory or _default_client_factory(timeout, contact)
         self._retry = retry
         self._client: httpx.AsyncClient | None = None
         self._pacers: dict[str, _HostPacer] = {}
@@ -116,9 +123,10 @@ class Session:
         return child
 
     def _adopt(self, parent: Session) -> None:
-        """Bind this scope to ``parent``: share its client and pacing, keep own cache."""
+        """Bind this scope to ``parent``: share its client, pacing, and contact; keep own cache."""
         self._parent = parent
         self._pacers = parent._pacers  # share the pacing dict by reference, so pacing spans the run
+        self.contact = parent.contact
         self._cache = {}
 
     async def __aenter__(self) -> Session:  # noqa: PYI034 -- Self needs py311; project targets py310
@@ -257,9 +265,13 @@ class Session:
         self,
         article_ids: ids.ArticleIds,
         *,
-        email: str = _http.CONTACT_EMAIL,
+        email: str | None = None,
     ) -> artifacts.SourceMetadata:
-        """Resolve licence / OA status from Unpaywall (see :func:`~litfetch.source_metadata.resolve_access`)."""
+        """Resolve licence / OA status from Unpaywall (see :func:`~litfetch.source_metadata.resolve_access`).
+
+        Unpaywall requires an email; it defaults to the session ``contact`` and
+        can be overridden here. Without either, the lookup is skipped.
+        """
         return await source_metadata.resolve_access(article_ids, http=self, email=email)
 
     async def related_ids(self, article_ids: ids.ArticleIds) -> tuple[relations.Related, ...]:
@@ -305,11 +317,14 @@ async def fetch_file(
 async def resolve_access(
     article_ids: ids.ArticleIds,
     *,
-    email: str = _http.CONTACT_EMAIL,
+    email: str | None = None,
 ) -> artifacts.SourceMetadata:
-    """One-shot :meth:`Session.resolve_access`: opens an ephemeral session for this call."""
-    async with Session() as session:
-        return await session.resolve_access(article_ids, email=email)
+    """One-shot :meth:`Session.resolve_access`: opens an ephemeral session for this call.
+
+    Unpaywall requires an ``email``; without one the lookup is skipped.
+    """
+    async with Session(contact=email) as session:
+        return await session.resolve_access(article_ids)
 
 
 async def related_ids(article_ids: ids.ArticleIds) -> tuple[relations.Related, ...]:

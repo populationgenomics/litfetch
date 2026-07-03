@@ -12,6 +12,7 @@ from tests import conftest
 
 _DOI = '10.1016/j.test.2024.01.001'
 _ELS_CREDS = {'elsevier_api_key': 'k'}
+_EMAIL = 'test@example.org'  # Unpaywall requires an email; litfetch ships no default
 
 
 def _xml_path(numeric: str, version: int) -> str:
@@ -534,7 +535,7 @@ def _unpaywall_record(pdf_url: str | None) -> httpx.Response:
 
 async def test_unpaywall_lists_best_oa_pdf_as_body(patch_transport: conftest.InstallTransport) -> None:
     patch_transport({f'GET {_UNPAYWALL_PATH}': [_unpaywall_record(_OA_PDF)]})
-    files = await sessions.list_files(ids.ArticleIds(doi=_DOI), sources=(fetchers.UnpaywallFileSource(),))
+    files = await sessions.list_files(ids.ArticleIds(doi=_DOI), sources=(fetchers.UnpaywallFileSource(email=_EMAIL),))
     assert len(files) == 1
     assert files[0].kind is artifacts.FileKind.BODY
     assert files[0].source == 'unpaywall'
@@ -544,11 +545,20 @@ async def test_unpaywall_lists_best_oa_pdf_as_body(patch_transport: conftest.Ins
 
 async def test_unpaywall_lists_nothing_without_pdf(patch_transport: conftest.InstallTransport) -> None:
     patch_transport({f'GET {_UNPAYWALL_PATH}': [_unpaywall_record(None)]})
-    assert await sessions.list_files(ids.ArticleIds(doi=_DOI), sources=(fetchers.UnpaywallFileSource(),)) == ()
+    sources = (fetchers.UnpaywallFileSource(email=_EMAIL),)
+    assert await sessions.list_files(ids.ArticleIds(doi=_DOI), sources=sources) == ()
 
 
 async def test_unpaywall_noop_without_doi() -> None:
-    assert await sessions.list_files(ids.ArticleIds(pmid='1'), sources=(fetchers.UnpaywallFileSource(),)) == ()
+    sources = (fetchers.UnpaywallFileSource(email=_EMAIL),)
+    assert await sessions.list_files(ids.ArticleIds(pmid='1'), sources=sources) == ()
+
+
+async def test_unpaywall_declines_without_contact(patch_transport: conftest.InstallTransport) -> None:
+    # No email/contact: Unpaywall can't be queried, so the source declines with no request.
+    transport = patch_transport({f'GET {_UNPAYWALL_PATH}': [_unpaywall_record(_OA_PDF)]})
+    assert await sessions.list_files(ids.ArticleIds(doi=_DOI), sources=(fetchers.UnpaywallFileSource(),)) == ()
+    assert transport.calls == []
 
 
 async def test_unpaywall_fetches_pdf_bytes(patch_transport: conftest.InstallTransport) -> None:
@@ -572,7 +582,8 @@ def test_default_file_sources_names() -> None:
 async def test_unpaywall_record_shared_within_scope(patch_transport: conftest.InstallTransport) -> None:
     # list_files and resolve_access both hit Unpaywall; a scope serves the second from cache.
     transport = patch_transport({f'GET {_UNPAYWALL_PATH}': [_unpaywall_record(_OA_PDF)]})
-    async with sessions.Session() as session, session.scope() as s:
+    # The session contact flows to both the file source and resolve_access (no per-call email).
+    async with sessions.Session(contact=_EMAIL) as session, session.scope() as s:
         files = await s.list_files(ids.ArticleIds(doi=_DOI), sources=(fetchers.UnpaywallFileSource(),))
         meta = await s.resolve_access(ids.ArticleIds(doi=_DOI))
     assert len(files) == 1

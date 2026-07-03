@@ -25,20 +25,23 @@ async def fetch_record(
     article_ids: ids.ArticleIds,
     *,
     http: _http.Http,
-    email: str = _http.CONTACT_EMAIL,
+    email: str | None = None,
 ) -> dict | None:
     """Return the parsed Unpaywall record for ``article_ids.doi``.
 
     Args:
         article_ids: The identifiers; only the DOI is used.
         http: The :class:`~litfetch._http.Http` to issue the request on.
-        email: Identifies the caller per Unpaywall's usage policy.
+        email: Identifies the caller per Unpaywall's policy; defaults to
+            ``http.contact``. Unpaywall requires it, so the request is skipped
+            when neither is set.
 
     Returns:
-        The parsed JSON record, or ``None`` when there is no DOI, the lookup
-        fails, or Unpaywall has no record.
+        The parsed JSON record, or ``None`` when there is no DOI, no email, the
+        lookup fails, or Unpaywall has no record.
     """
-    if not article_ids.doi:
+    email = email or http.contact
+    if not article_ids.doi or not email:
         return None
     url = f'{_UNPAYWALL_BASE}/{_doi.encode_doi_path(article_ids.doi)}'
     try:

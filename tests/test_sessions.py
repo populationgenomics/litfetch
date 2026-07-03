@@ -52,6 +52,24 @@ async def test_get_delegates_to_client() -> None:
     assert calls == ['https://example/?a=1']
 
 
+async def test_default_client_factory_user_agent_reflects_contact() -> None:
+    with_contact = sessions._default_client_factory(30.0, 'me@example.org')()
+    without = sessions._default_client_factory(30.0, None)()
+    try:
+        assert with_contact.headers['user-agent'].endswith('(mailto:me@example.org)')
+        assert 'mailto' not in without.headers['user-agent']
+    finally:
+        await with_contact.aclose()
+        await without.aclose()
+
+
+async def test_scope_inherits_contact() -> None:
+    async with sessions.Session(contact='me@example.org', client_factory=_factory([])) as session:
+        assert session.contact == 'me@example.org'
+        async with session.scope() as s:
+            assert s.contact == 'me@example.org'
+
+
 async def test_get_follows_redirects_only_when_asked() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/start':
