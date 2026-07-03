@@ -1,16 +1,34 @@
 [project]
 name = "litfetch"
 version = "0.1.0"
-description = "Identifier -> full-text markdown: a pluggable source ladder + identifier resolvers."
+description = "Identifier -> the retrievable artifacts of a scholarly article: a pluggable source ladder + identifier resolvers."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Toby Sargeant" }]
-keywords = ["pubmed", "pmc", "full-text", "jats", "elsevier", "markdown"]
-dependencies = [
-  "httpx>=0.28",
-  "litdown>=0.3",
+keywords = ["pubmed", "pmc", "full-text", "jats", "elsevier", "supplementary"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Typing :: Typed",
 ]
+dependencies = [
+  "defusedxml>=0.7",
+  "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+# bioRxiv/medRxiv preprint full text. Their JATS sits behind Cloudflare, so the
+# fetch needs a browser-fingerprint client; `litfetch[biorxiv]` enables
+# BiorxivFetcher (off the default ladder -- add it explicitly).
+biorxiv = ["curl_cffi>=0.7"]
 
 [project.urls]
 Repository = "https://github.com/populationgenomics/litfetch"
@@ -27,21 +45,19 @@ exclude = ["tests*"]
 [tool.setuptools.package-data]
 litfetch = ["py.typed"]
 
-# litdown is not on PyPI; resolve it from GitHub for litfetch's own dev/CI only.
-# uv.sources is ignored when building/publishing the wheel, so downstream
-# consumers still see the abstract `litdown>=0.3` dependency and supply it from
-# their own wheelhouse. Pinned to HEAD until litdown cuts a tagged release.
-[tool.uv.sources]
-litdown = { git = "https://github.com/populationgenomics/litdown.git", branch = "main" }
-
 # Supply-chain age gate: never resolve a release younger than 7 days. Declared
 # in-repo so CI and contributors inherit the same resolution.
 [tool.uv]
 exclude-newer = "7 days"
 
+# curl_cffi (the biorxiv extra) is in the dev groups so the BiorxivFetcher tests
+# and type-checking have it; consumers opt in via the `biorxiv` extra.
 [dependency-groups]
-test = ["pytest", "pytest-asyncio", "pytest-mock"]
-lint = ["ruff", "pyright", "pytest", "pytest-asyncio", "pytest-mock"]
+test = ["curl_cffi>=0.7", "pytest", "pytest-asyncio", "pytest-mock"]
+# pre-commit is in the lint group because CI runs the whole static-check gate via
+# `uv run pre-commit run --all-files`. pyright checks litfetch/ + tests/, so the
+# group carries the test deps for those imports to resolve.
+lint = ["curl_cffi>=0.7", "ruff", "pyright", "pre-commit", "pytest", "pytest-asyncio", "pytest-mock"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -88,6 +104,24 @@ ignore = [
     "S101",   # asserts are the standard pytest idiom
     "SLF001", # tests legitimately reach into module privates
 ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+# Complexity thresholds: roughly double the ruff defaults so the checks fire on
+# genuinely sprawling code but not on everyday parsers and dispatchers.
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+[tool.ruff.lint.pylint]
+max-args = 10
+max-branches = 20
+max-returns = 10
+max-statements = 80
+max-locals = 25
 
 [tool.pyright]
 pythonVersion = "3.10"

@@ -165,3 +165,6 @@ test_eq.pdf
 eval_findings.jsonl
 compare_pandoc.jsonl
 grading.jsonl
+
+# litcache default cache directory
+.litcache/
