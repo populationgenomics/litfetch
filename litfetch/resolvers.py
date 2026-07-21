@@ -19,8 +19,9 @@ local cache, a corpus client) belong in the consumer and slot into the same
 
 from __future__ import annotations
 
+import dataclasses
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 
 import httpx
 
@@ -34,6 +35,20 @@ _NCBI_IDCONV_BASE = 'https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/'
 # A resolver enriches a bundle: given the known ids and an Http, it returns a
 # (possibly) fuller ArticleIds and preserves every identifier it was given.
 Resolver = Callable[[ids.ArticleIds, _http.Http], Awaitable[ids.ArticleIds]]
+
+# A batch resolver enriches a whole sequence in one pass, amortizing a source's
+# per-source rate domain across N papers.  It returns the enriched sequence
+# (element i is input element i, merged -- length and order preserved) and the
+# set of indices whose lookup was *abandoned* after retry-exhaustion: still
+# un-answered, distinct from a definitive no-match.  A caller retries only the
+# abandoned slice rather than re-running the whole batch.  The failure signal
+# rides this tuple, never the ArticleIds value object (which stays str | None).
+BatchResolver = Callable[
+    [Sequence[ids.ArticleIds], _http.Http],
+    Awaitable[tuple[Sequence[ids.ArticleIds], set[int]]],
+]
+
+_ID_FIELDS = frozenset(field.name for field in dataclasses.fields(ids.ArticleIds))
 
 
 def _pmcid_with_prefix(value: str | None) -> str | None:
@@ -189,6 +204,67 @@ def default_resolver() -> Resolver:
     :func:`chain` for broader coverage.
     """
     return chain(EuropePmcResolver(), NcbiIdConverterResolver())
+
+
+def chain_batch(
+    *resolvers: BatchResolver,
+    required: Iterable[str] = ('pmid', 'pmcid', 'doi'),
+) -> BatchResolver:
+    """Compose batch resolvers, each fed only the elements still missing a ``required`` field.
+
+    The batch analogue of :func:`chain`'s early-stop, expressed per-element: an
+    element complete on ``required`` passes through untouched and keeps its
+    index, so a later resolver spends its rate budget only on what earlier ones
+    left incomplete (``NcbiIdConverterBatchResolver`` first, ``OpenAlexResolver``
+    only for the DOIs NCBI missed).
+
+    ``required`` is parameterizable because a caller resolving for the PMC ladder
+    needs only ``pmcid``; forcing all three would spend calls chasing a
+    ``doi``/``pmid`` the ladder never keys on.
+
+    The returned abandoned set holds an index iff the element is *still*
+    incomplete on ``required`` **and** some resolver abandoned it after
+    retry-exhaustion.  An element a later resolver completed is dropped from the
+    set; one every resolver answered with a definitive no-match never enters it
+    (a genuine absence, not worth retrying).
+
+    Args:
+        *resolvers: Batch resolvers run in order.
+        required: Identifier fields an element must carry to be considered
+            complete and skipped by later resolvers.
+
+    Returns:
+        A :data:`BatchResolver` over the composed chain.
+
+    Raises:
+        ValueError: If ``required`` is empty or names a field that is not an
+            :class:`~litfetch.ids.ArticleIds` identifier.
+    """
+    required = tuple(required)
+    if not required:
+        raise ValueError('required must name at least one identifier field')
+    unknown = set(required) - _ID_FIELDS
+    if unknown:
+        raise ValueError(f'required names unknown identifier field(s): {sorted(unknown)}')
+
+    async def _run(
+        article_ids: Sequence[ids.ArticleIds], http: _http.Http
+    ) -> tuple[Sequence[ids.ArticleIds], set[int]]:
+        results = list(article_ids)
+        abandoned: set[int] = set()
+        for resolver in resolvers:
+            pending = [i for i, item in enumerate(results) if not item.has(required)]
+            if not pending:
+                break
+            enriched, sub_abandoned = await resolver([results[i] for i in pending], http)
+            for position, index in enumerate(pending):
+                results[index] = results[index].merge(enriched[position])
+                if position in sub_abandoned:
+                    abandoned.add(index)
+        # An element completed by a later resolver is no longer abandoned.
+        return results, {index for index in abandoned if not results[index].has(required)}
+
+    return _run
 
 
 def _idconv_query(article_ids: ids.ArticleIds) -> tuple[str, str] | None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from litfetch import ids, resolvers, sessions
 from tests import conftest
@@ -145,3 +146,84 @@ async def test_default_resolver_composes_europe_pmc_then_ncbi(patch_transport: c
     async with sessions.Session() as s:
         resolved = await resolvers.default_resolver()(ids.ArticleIds(pmid='9'), s)
     assert resolved == ids.ArticleIds(pmid='9', pmcid='PMC9', doi=_DOI)
+
+
+# --- chain_batch ---------------------------------------------------------
+
+
+class _BatchStub:
+    """A batch resolver stub: enrich each keyed element, optionally abandon some.
+
+    ``fill`` is merged into every element the stub is given; ``abandon`` names
+    input keys (any present identifier) whose position is reported abandoned.
+    Records each call's received sequence for order/subset assertions.
+    """
+
+    def __init__(self, fill: ids.ArticleIds, *, abandon: frozenset[str] = frozenset()) -> None:
+        self._fill = fill
+        self._abandon = abandon
+        self.received: list[list[ids.ArticleIds]] = []
+
+    async def __call__(self, article_ids: object, http: object) -> tuple[list[ids.ArticleIds], set[int]]:
+        del http
+        batch = list(article_ids)  # type: ignore[arg-type]
+        self.received.append(batch)
+        enriched = [item.merge(self._fill) for item in batch]
+        abandoned = {i for i, item in enumerate(batch) if {item.pmid, item.pmcid, item.doi} & self._abandon}
+        return enriched, abandoned
+
+
+async def test_chain_batch_preserves_order_and_length() -> None:
+    composed = resolvers.chain_batch(_BatchStub(ids.ArticleIds(pmcid='PMCx')))
+    resolved, abandoned = await composed([ids.ArticleIds(pmid='1'), ids.ArticleIds(pmid='2')], _NoHttp())
+    assert resolved == [ids.ArticleIds(pmid='1', pmcid='PMCx'), ids.ArticleIds(pmid='2', pmcid='PMCx')]
+    assert abandoned == set()
+
+
+async def test_chain_batch_feeds_later_resolver_only_incomplete_elements() -> None:
+    first = _BatchStub(ids.ArticleIds(pmcid='PMC1', doi=_DOI))
+    second = _BatchStub(ids.ArticleIds(pmid='resolved'))
+    # required defaults to all three: element 0 (pmid+pmcid+doi) is complete after `first`.
+    composed = resolvers.chain_batch(first, second)
+    await composed([ids.ArticleIds(pmid='0'), ids.ArticleIds(doi='only')], _NoHttp())
+    assert first.received == [[ids.ArticleIds(pmid='0'), ids.ArticleIds(doi='only')]]
+    # `second` sees only the still-incomplete element (index 1: doi-only, no pmid/pmcid).
+    assert second.received == [[ids.ArticleIds(doi='only', pmcid='PMC1')]]
+
+
+async def test_chain_batch_respects_required_subset() -> None:
+    # pmid-only becomes pmcid-complete after one fill; the second stub must not see it.
+    stub = _BatchStub(ids.ArticleIds(pmcid='PMCx'))
+    second = _BatchStub(ids.ArticleIds(doi=_DOI))
+    composed = resolvers.chain_batch(stub, second, required=('pmcid',))
+    resolved, _ = await composed([ids.ArticleIds(pmid='1')], _NoHttp())
+    assert resolved == [ids.ArticleIds(pmid='1', pmcid='PMCx')]
+    assert second.received == []
+
+
+async def test_chain_batch_reports_abandoned_index() -> None:
+    stub = _BatchStub(ids.ArticleIds(), abandon=frozenset({'2'}))
+    composed = resolvers.chain_batch(stub)
+    resolved, abandoned = await composed([ids.ArticleIds(pmid='1'), ids.ArticleIds(pmid='2')], _NoHttp())
+    assert resolved == [ids.ArticleIds(pmid='1'), ids.ArticleIds(pmid='2')]
+    assert abandoned == {1}
+
+
+async def test_chain_batch_clears_abandonment_when_later_resolver_completes() -> None:
+    # `first` abandons the doi-only element; `second` resolves it to complete.
+    first = _BatchStub(ids.ArticleIds(), abandon=frozenset({'only'}))
+    second = _BatchStub(ids.ArticleIds(pmid='p', pmcid='PMCx'))
+    composed = resolvers.chain_batch(first, second)
+    resolved, abandoned = await composed([ids.ArticleIds(doi='only')], _NoHttp())
+    assert resolved == [ids.ArticleIds(pmid='p', pmcid='PMCx', doi='only')]
+    assert abandoned == set()
+
+
+async def test_chain_batch_rejects_empty_required() -> None:
+    with pytest.raises(ValueError, match='at least one'):
+        resolvers.chain_batch(required=())
+
+
+async def test_chain_batch_rejects_unknown_required_field() -> None:
+    with pytest.raises(ValueError, match='unknown identifier'):
+        resolvers.chain_batch(required=('pmid', 'issn'))
