@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 _EUROPE_PMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
 _NCBI_IDCONV_BASE = 'https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/'
+_OPENALEX_WORKS = 'https://api.openalex.org/works'
 
 # A resolver enriches a bundle: given the known ids and an Http, it returns a
 # (possibly) fuller ArticleIds and preserves every identifier it was given.
@@ -340,6 +341,82 @@ class SemanticScholarResolver:
                 doi=external.get('DOI') or None,
             )
         )
+
+
+def _openalex_key(article_ids: ids.ArticleIds) -> str | None:
+    """The wire filter key for an element: its DOI, lowercased (OpenAlex is doi-keyed).
+
+    OpenAlex stores and echoes DOIs lowercased, so lowercasing here makes the
+    query key, the wire filter, and the result correlation all agree.  A paper
+    with no DOI is passed through untouched -- OpenAlex has nothing to key on.
+    """
+    return article_ids.doi.lower() if article_ids.doi else None
+
+
+def _openalex_bare_doi(value: object) -> str | None:
+    """Strip an OpenAlex DOI URL (``https://doi.org/10.x/y``) to the bare, lowercased id."""
+    doi = _as_str(value)
+    if doi is None:
+        return None
+    _, _, rest = doi.partition('doi.org/')
+    return (rest or doi).lower()
+
+
+def _openalex_last_segment(value: object) -> str | None:
+    """Strip an OpenAlex id URL to its final path segment (``.../PMC123`` -> ``PMC123``)."""
+    url = _as_str(value)
+    if url is None:
+        return None
+    return url.rsplit('/', 1)[-1] or None
+
+
+class OpenAlexResolver:
+    """Resolve ``doi -> pmid``/``pmcid`` via OpenAlex's works endpoint.
+
+    Batch, keyless, and strictly id->id: the works filter takes a
+    ``doi:<a>|<b>|...`` OR-list and each work's ``ids`` carries its pmid/pmcid, so
+    one request maps up to 50 DOIs.  ``select`` is restricted to the id fields, so
+    no bibliographic record crosses litfetch's id surface.  It covers the
+    doi-bearing papers NCBI could not route (a DOI in PubMed-but-not-PMC, or not
+    in PubMed).  The session ``contact`` is sent as ``mailto`` (the polite-pool
+    parameter), omitted when unset.
+    """
+
+    _CAP = 50
+
+    async def __call__(
+        self, article_ids: Sequence[ids.ArticleIds], http: _http.Http
+    ) -> tuple[list[ids.ArticleIds], set[int]]:
+        """Return the batch enriched with pmid/pmcid for DOIs OpenAlex knows, and abandoned indices."""
+        return await _run_chunked(
+            article_ids, key=_openalex_key, cap=self._CAP, resolve_chunk=self._resolve_chunk, http=http
+        )
+
+    async def _resolve_chunk(self, dois: Sequence[str], http: _http.Http) -> Mapping[str, ids.ArticleIds]:
+        """Map one chunk of DOIs to ``{bare doi: enrichment}`` from the works response."""
+        params: dict[str, str | int] = {
+            'filter': 'doi:' + '|'.join(dois),
+            'select': 'ids,doi',
+            'per-page': len(dois),
+        }
+        if http.contact:
+            params['mailto'] = http.contact
+        data = await _get_json_or_abandon(
+            http, _OPENALEX_WORKS, params=params, context='OpenAlex works', rate=_http.Rate.OPENALEX
+        )
+        if data is None:
+            return {}
+        mapping: dict[str, ids.ArticleIds] = {}
+        for work in data.get('results', []):
+            doi_key = _openalex_bare_doi(work.get('doi'))
+            if doi_key is None:
+                continue
+            work_ids = work.get('ids') or {}
+            mapping[doi_key] = ids.ArticleIds(
+                pmid=_openalex_last_segment(work_ids.get('pmid')),
+                pmcid=_pmcid_with_prefix(_openalex_last_segment(work_ids.get('pmcid'))),
+            )
+        return mapping
 
 
 def chain(*resolvers: Resolver) -> Resolver:

@@ -50,6 +50,7 @@ class Rate(enum.Enum):
     NCBI_KEYED = 'ncbi_keyed'
     S2_UNKEYED = 's2_unkeyed'
     S2_KEYED = 's2_keyed'
+    OPENALEX = 'openalex'
 
     @property
     def min_interval(self) -> float:
@@ -66,6 +67,7 @@ _MIN_INTERVALS = {
     Rate.NCBI_KEYED: 0.1,  # ~10 req/s with an NCBI API key
     Rate.S2_UNKEYED: 1.0,  # Semantic Scholar's shared public pool: stay conservative
     Rate.S2_KEYED: 0.1,  # with a Semantic Scholar API key
+    Rate.OPENALEX: 0.1,  # ~10 req/s, OpenAlex's polite-pool allowance (with mailto)
 }
 
 

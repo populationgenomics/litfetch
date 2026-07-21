@@ -364,3 +364,59 @@ async def test_ncbi_batch_resolver_dedups_repeated_doi(patch_transport: conftest
         )
     assert enriched[0] == enriched[1] == ids.ArticleIds(pmid='9', pmcid='PMC9', doi=_DOI)
     assert f'ids={_DOI}' in transport.calls[0][1].replace('%2F', '/').replace('%3A', ':')  # queried once
+
+
+# --- OpenAlex resolver ---------------------------------------------------
+
+_OPENALEX_PATH = '/works'
+
+
+def _openalex_work(doi: str, *, pmid: str | None = None, pmcid: str | None = None) -> dict[str, object]:
+    """An OpenAlex works record: DOI and pmid/pmcid come back as URLs."""
+    work_ids: dict[str, str] = {'doi': f'https://doi.org/{doi}'}
+    if pmid is not None:
+        work_ids['pmid'] = f'https://pubmed.ncbi.nlm.nih.gov/{pmid}'
+    if pmcid is not None:
+        work_ids['pmcid'] = f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}'
+    return {'doi': f'https://doi.org/{doi}', 'ids': work_ids}
+
+
+async def test_openalex_resolver_maps_doi_to_pmid_and_pmcid(patch_transport: conftest.InstallTransport) -> None:
+    transport = patch_transport(
+        {
+            f'GET {_OPENALEX_PATH}': [
+                httpx.Response(200, json={'results': [_openalex_work(_DOI, pmid='9', pmcid='PMC9')]})
+            ]
+        }
+    )
+    async with sessions.Session() as s:
+        enriched, abandoned = await resolvers.OpenAlexResolver()([ids.ArticleIds(doi=_DOI)], s)
+    assert enriched == [ids.ArticleIds(pmid='9', pmcid='PMC9', doi=_DOI)]  # URLs stripped to bare ids
+    assert abandoned == set()
+    filter_param = transport.calls[0][1].replace('%2F', '/').replace('%3A', ':')
+    assert f'doi:{_DOI}' in filter_param
+
+
+async def test_openalex_resolver_correlates_case_insensitively(patch_transport: conftest.InstallTransport) -> None:
+    # The element's DOI is upper-case; OpenAlex echoes it lower-case. They must still correlate.
+    upper = _DOI.upper()
+    patch_transport(
+        {f'GET {_OPENALEX_PATH}': [httpx.Response(200, json={'results': [_openalex_work(_DOI, pmid='9')]})]}
+    )
+    async with sessions.Session() as s:
+        enriched, _ = await resolvers.OpenAlexResolver()([ids.ArticleIds(doi=upper)], s)
+    assert enriched == [ids.ArticleIds(pmid='9', doi=upper)]  # original-case DOI preserved, pmid added
+
+
+async def test_openalex_resolver_passes_through_doi_less_element() -> None:
+    enriched, abandoned = await resolvers.OpenAlexResolver()([ids.ArticleIds(pmid='9')], _NoHttp())
+    assert enriched == [ids.ArticleIds(pmid='9')]  # no DOI to key on: no request
+    assert abandoned == set()
+
+
+async def test_openalex_resolver_leaves_unknown_doi_unenriched(patch_transport: conftest.InstallTransport) -> None:
+    patch_transport({f'GET {_OPENALEX_PATH}': [httpx.Response(200, json={'results': []})]})
+    async with sessions.Session() as s:
+        enriched, abandoned = await resolvers.OpenAlexResolver()([ids.ArticleIds(doi=_DOI)], s)
+    assert enriched == [ids.ArticleIds(doi=_DOI)]  # definitive no-match, not abandoned
+    assert abandoned == set()
