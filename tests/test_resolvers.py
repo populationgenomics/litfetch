@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from litfetch import ids, resolvers, sessions
+from litfetch import _http, ids, resolvers, sessions
 from tests import conftest
 
 _EPMC_SEARCH_PATH = '/europepmc/webservices/rest/search'
@@ -227,3 +227,140 @@ async def test_chain_batch_rejects_empty_required() -> None:
 async def test_chain_batch_rejects_unknown_required_field() -> None:
     with pytest.raises(ValueError, match='unknown identifier'):
         resolvers.chain_batch(required=('pmid', 'issn'))
+
+
+# --- _run_chunked / abandonment ------------------------------------------
+
+
+class _StubHttp:
+    """An Http returning one canned response, or raising one canned error."""
+
+    contact: str | None = None
+
+    def __init__(self, *, response: httpx.Response | None = None, error: Exception | None = None) -> None:
+        self._response = response
+        self._error = error
+
+    async def get(self, *_args: object, **_kwargs: object) -> httpx.Response:
+        if self._error is not None:
+            raise self._error
+        assert self._response is not None
+        return self._response
+
+
+async def test_run_chunked_dedups_and_fans_out_to_repeats() -> None:
+    seen: list[list[str]] = []
+
+    async def resolve(chunk: object, _http_arg: object) -> dict[str, ids.ArticleIds]:
+        keys = list(chunk)  # type: ignore[arg-type]
+        seen.append(keys)
+        return {k: ids.ArticleIds(pmcid=f'PMC{k}') for k in keys}
+
+    items = [ids.ArticleIds(pmid='1'), ids.ArticleIds(pmid='2'), ids.ArticleIds(pmid='1')]
+    enriched, abandoned = await resolvers._run_chunked(
+        items, key=lambda a: a.pmid, cap=10, resolve_chunk=resolve, http=_NoHttp()
+    )
+    assert seen == [['1', '2']]  # '1' queried once despite appearing twice
+    assert enriched[0] == ids.ArticleIds(pmid='1', pmcid='PMC1')
+    assert enriched[2] == ids.ArticleIds(pmid='1', pmcid='PMC1')  # fanned back to the repeat
+    assert abandoned == set()
+
+
+async def test_run_chunked_splits_at_cap() -> None:
+    seen: list[list[str]] = []
+
+    async def resolve(chunk: object, _http_arg: object) -> dict[str, ids.ArticleIds]:
+        seen.append(list(chunk))  # type: ignore[arg-type]
+        return {}
+
+    items = [ids.ArticleIds(pmid=str(i)) for i in range(5)]
+    await resolvers._run_chunked(items, key=lambda a: a.pmid, cap=2, resolve_chunk=resolve, http=_NoHttp())
+    assert [len(chunk) for chunk in seen] == [2, 2, 1]
+
+
+async def test_run_chunked_marks_abandoned_chunk_indices() -> None:
+    async def resolve(_chunk: object, _http_arg: object) -> dict[str, ids.ArticleIds]:
+        raise resolvers._ChunkAbandonedError('boom')
+
+    items = [ids.ArticleIds(pmid='1'), ids.ArticleIds(pmid='2')]
+    enriched, abandoned = await resolvers._run_chunked(
+        items, key=lambda a: a.pmid, cap=10, resolve_chunk=resolve, http=_NoHttp()
+    )
+    assert enriched == items  # un-enriched, never invented
+    assert abandoned == {0, 1}
+
+
+async def test_run_chunked_passes_through_unkeyable_elements() -> None:
+    async def resolve(_chunk: object, _http_arg: object) -> dict[str, ids.ArticleIds]:
+        raise AssertionError('no keyed element, no request expected')
+
+    items = [ids.ArticleIds(doi='d'), ids.ArticleIds()]  # neither has a pmid to key on
+    enriched, abandoned = await resolvers._run_chunked(
+        items, key=lambda a: a.pmid, cap=10, resolve_chunk=resolve, http=_NoHttp()
+    )
+    assert enriched == items
+    assert abandoned == set()
+
+
+async def test_get_json_or_abandon_raises_on_retryable_status() -> None:
+    http = _StubHttp(response=httpx.Response(429))
+    with pytest.raises(resolvers._ChunkAbandonedError):
+        await resolvers._get_json_or_abandon(http, 'http://x', params={}, context='c', rate=_http.Rate.DEFAULT)
+
+
+async def test_get_json_or_abandon_raises_on_transport_error() -> None:
+    http = _StubHttp(error=httpx.ConnectError('boom'))
+    with pytest.raises(resolvers._ChunkAbandonedError):
+        await resolvers._get_json_or_abandon(http, 'http://x', params={}, context='c', rate=_http.Rate.DEFAULT)
+
+
+async def test_get_json_or_abandon_returns_none_on_non_retryable_status() -> None:
+    http = _StubHttp(response=httpx.Response(404))
+    result = await resolvers._get_json_or_abandon(http, 'http://x', params={}, context='c', rate=_http.Rate.DEFAULT)
+    assert result is None  # definitive dead end, not abandoned
+
+
+# --- NCBI ID Converter batch resolver ------------------------------------
+
+
+async def test_ncbi_batch_resolver_maps_mixed_scheme_in_one_call(
+    patch_transport: conftest.InstallTransport,
+) -> None:
+    transport = patch_transport(
+        {
+            f'GET {_IDCONV_PATH}': [
+                httpx.Response(
+                    200,
+                    json={
+                        'records': [
+                            {'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI},
+                            {'pmid': 10, 'doi': 'other-doi'},
+                        ]
+                    },
+                )
+            ],
+        }
+    )
+    async with sessions.Session() as s:
+        enriched, abandoned = await resolvers.NcbiIdConverterBatchResolver()(
+            [ids.ArticleIds(pmid='9'), ids.ArticleIds(doi='other-doi')], s
+        )
+    assert enriched == [
+        ids.ArticleIds(pmid='9', pmcid='PMC9', doi=_DOI),
+        ids.ArticleIds(pmid='10', doi='other-doi'),
+    ]
+    assert abandoned == set()
+    assert len(transport.calls) == 1  # one wire request for the whole batch
+    assert 'idtype' not in transport.calls[0][1]  # auto-detect: no idtype sent
+
+
+async def test_ncbi_batch_resolver_dedups_repeated_doi(patch_transport: conftest.InstallTransport) -> None:
+    transport = patch_transport(
+        {f'GET {_IDCONV_PATH}': [httpx.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})]}
+    )
+    async with sessions.Session() as s:
+        enriched, _ = await resolvers.NcbiIdConverterBatchResolver()(
+            [ids.ArticleIds(doi=_DOI), ids.ArticleIds(doi=_DOI)], s
+        )
+    assert enriched[0] == enriched[1] == ids.ArticleIds(pmid='9', pmcid='PMC9', doi=_DOI)
+    assert f'ids={_DOI}' in transport.calls[0][1].replace('%2F', '/').replace('%3A', ':')  # queried once

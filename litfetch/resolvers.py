@@ -19,6 +19,7 @@ local cache, a corpus client) belong in the consumer and slot into the same
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -84,6 +85,108 @@ async def _get_json(
         return None
 
 
+class _ChunkAbandonedError(Exception):
+    """A batch chunk's lookup was given up on after retry-exhaustion.
+
+    Distinct from a definitive no-match: the source never answered (a transport
+    failure, or a 429/5xx that survived every retry), so retrying the chunk later
+    may still resolve it.  :func:`_run_chunked` catches this and marks the
+    chunk's keys abandoned rather than treating them as absences.
+    """
+
+
+def _as_str(value: object) -> str | None:
+    """Return ``value`` if it is a non-empty string, else ``None`` (JSON is untyped)."""
+    return value if isinstance(value, str) and value else None
+
+
+async def _get_json_or_abandon(
+    http: _http.Http,
+    url: str,
+    *,
+    params: Mapping[str, str | int],
+    context: str,
+    rate: _http.Rate,
+) -> dict | None:
+    """GET and parse JSON like :func:`_get_json`, but *raise* on abandonment.
+
+    A transport failure or a retryable status (429/5xx) that outlived every retry
+    means the source never answered: raise :class:`_ChunkAbandonedError` so the batch
+    marks the chunk retryable.  A non-retryable non-200 or non-JSON body is a
+    definitive dead end -- logged and returned as ``None`` (no enrichment, not
+    abandoned).
+    """
+    try:
+        resp = await http.get(url, params=params, rate=rate)
+    except httpx.HTTPError as e:
+        raise _ChunkAbandonedError(f'{context}: transport failure') from e
+    if resp.status_code in _http.RETRYABLE_STATUS:  # survived retries: never answered
+        raise _ChunkAbandonedError(f'{context}: HTTP {resp.status_code} after retries')
+    if resp.status_code != 200:
+        logger.warning('%s returned HTTP %d', context, resp.status_code)
+        return None
+    try:
+        return resp.json()
+    except ValueError:
+        logger.warning('%s returned a non-JSON response', context)
+        return None
+
+
+async def _run_chunked(
+    article_ids: Sequence[ids.ArticleIds],
+    *,
+    key: Callable[[ids.ArticleIds], str | None],
+    cap: int,
+    resolve_chunk: Callable[[Sequence[str], _http.Http], Awaitable[Mapping[str, ids.ArticleIds]]],
+    http: _http.Http,
+) -> tuple[list[ids.ArticleIds], set[int]]:
+    """Resolve a batch through a per-chunk mapping call, deduping ids on the wire.
+
+    ``key`` yields the wire identifier for an element, or ``None`` when the source
+    cannot key on it (passed through untouched, never queried).  Distinct keys are
+    chunked at ``cap`` and each chunk handed to ``resolve_chunk`` (gathered; the
+    Session paces per host), which returns ``{wire id: enrichment}`` for whatever
+    it mapped and raises :class:`_ChunkAbandonedError` for a chunk the source never
+    answered.  Each result fans back to *every* index sharing its key, so a batch
+    with repeats costs one lookup per distinct id; order and length are preserved.
+
+    Returns:
+        The enriched sequence and the set of indices whose chunk was abandoned
+        (and which therefore stayed un-enriched by this resolver).
+    """
+    keys = [key(item) for item in article_ids]
+    distinct = list(dict.fromkeys(k for k in keys if k))
+    if not distinct:
+        return list(article_ids), set()
+    chunks = [distinct[i : i + cap] for i in range(0, len(distinct), cap)]
+
+    async def _resolve(chunk: Sequence[str]) -> tuple[Sequence[str], Mapping[str, ids.ArticleIds] | None]:
+        try:
+            return chunk, await resolve_chunk(chunk, http)
+        except _ChunkAbandonedError:
+            logger.warning('batch chunk abandoned (%d ids)', len(chunk))
+            return chunk, None
+
+    mapping: dict[str, ids.ArticleIds] = {}
+    abandoned_keys: set[str] = set()
+    for chunk, resolved in await asyncio.gather(*(_resolve(chunk) for chunk in chunks)):
+        if resolved is None:
+            abandoned_keys.update(chunk)
+        else:
+            mapping.update(resolved)
+
+    enriched: list[ids.ArticleIds] = []
+    abandoned: set[int] = set()
+    for index, (item, k) in enumerate(zip(article_ids, keys, strict=True)):
+        if k is not None and k in mapping:
+            enriched.append(item.merge(mapping[k]))
+        else:
+            enriched.append(item)
+            if k is not None and k in abandoned_keys:
+                abandoned.add(index)
+    return enriched, abandoned
+
+
 class EuropePmcResolver:
     """Resolve ``pmid -> pmcid`` via Europe PMC's search API.
 
@@ -109,6 +212,31 @@ class EuropePmcResolver:
         if not records:
             return article_ids
         return article_ids.merge(ids.ArticleIds(pmcid=_pmcid_with_prefix(records[0].get('pmcid'))))
+
+
+def _ncbi_record_to_ids(rec: Mapping[str, object]) -> ids.ArticleIds:
+    """Map one NCBI ID Converter record to an :class:`~litfetch.ids.ArticleIds`.
+
+    The one source of truth for the NCBI record shape, shared by the per-item and
+    batch paths.  ``pmid`` comes back as an int on the migrated endpoint;
+    ``ArticleIds`` holds strings.
+    """
+    pmid = rec.get('pmid')
+    return ids.ArticleIds(
+        pmid=str(pmid) if pmid else None,
+        pmcid=_pmcid_with_prefix(_as_str(rec.get('pmcid'))),
+        doi=_as_str(rec.get('doi')),
+    )
+
+
+def _ncbi_batch_key(article_ids: ids.ArticleIds) -> str | None:
+    """The wire id an id-type-less NCBI batch auto-detects for this element.
+
+    Mirrors :func:`_idconv_query`'s pmid > pmcid > doi priority, but normalises a
+    PMCID to its ``PMC...`` form: without an explicit ``idtype`` a bare number
+    would be misdetected as a PMID.
+    """
+    return article_ids.pmid or _pmcid_with_prefix(article_ids.pmcid) or article_ids.doi
 
 
 class NcbiIdConverterResolver:
@@ -140,15 +268,52 @@ class NcbiIdConverterResolver:
         records = data.get('records', [])
         if not records or records[0].get('status') == 'error':
             return article_ids
-        rec = records[0]
-        return article_ids.merge(
-            ids.ArticleIds(
-                # The migrated endpoint returns pmid as an int; ArticleIds holds strings.
-                pmid=(str(rec['pmid']) if rec.get('pmid') else None),
-                pmcid=_pmcid_with_prefix(rec.get('pmcid')),
-                doi=rec.get('doi') or None,
-            )
+        return article_ids.merge(_ncbi_record_to_ids(records[0]))
+
+
+class NcbiIdConverterBatchResolver:
+    """Batch ``pmid``/``pmcid``/``doi`` cross-referencing via NCBI's ID Converter.
+
+    Same endpoint and record shape as :class:`NcbiIdConverterResolver`; only the
+    fan-in differs.  The batch request **omits** ``idtype`` so the converter
+    auto-detects each id's scheme, letting a mixed-scheme batch (some DOIs, some
+    PMIDs) resolve in one call.  The wire list is deduped and chunked at the
+    converter's 200-id cap.
+    """
+
+    _CAP = 200
+
+    def __init__(self, *, tool: str = 'litfetch') -> None:
+        self._tool = tool
+
+    async def __call__(
+        self, article_ids: Sequence[ids.ArticleIds], http: _http.Http
+    ) -> tuple[list[ids.ArticleIds], set[int]]:
+        """Return the batch enriched with whatever the ID Converter maps, and abandoned indices."""
+        return await _run_chunked(
+            article_ids, key=_ncbi_batch_key, cap=self._CAP, resolve_chunk=self._resolve_chunk, http=http
         )
+
+    async def _resolve_chunk(self, wire_ids: Sequence[str], http: _http.Http) -> Mapping[str, ids.ArticleIds]:
+        """Map one chunk of wire ids to ``{wire id: enrichment}``, keyed by echoed id."""
+        params: dict[str, str | int] = {'ids': ','.join(wire_ids), 'format': 'json', 'tool': self._tool}
+        if http.contact:
+            params['email'] = http.contact
+        data = await _get_json_or_abandon(
+            http, _NCBI_IDCONV_BASE, params=params, context='NCBI ID Converter batch', rate=_http.Rate.NCBI_UNKEYED
+        )
+        if data is None:
+            return {}
+        mapping: dict[str, ids.ArticleIds] = {}
+        for rec in data.get('records', []):
+            if rec.get('status') == 'error':
+                continue
+            enrichment = _ncbi_record_to_ids(rec)
+            # Index under every echoed id form so an element keyed on any of them fans out.
+            for form in (enrichment.pmid, enrichment.pmcid, enrichment.doi):
+                if form is not None:
+                    mapping[form] = enrichment
+        return mapping
 
 
 class SemanticScholarResolver:

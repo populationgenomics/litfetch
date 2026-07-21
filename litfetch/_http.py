@@ -32,7 +32,7 @@ USER_AGENT = 'litfetch/0.1'
 
 # Status codes worth retrying: 429 (rate limited) and the transient 5xx family.
 # A 4xx other than 429 is the caller's fault and will not fix itself on retry.
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class Rate(enum.Enum):
@@ -164,7 +164,7 @@ async def get(
             if last_attempt:
                 raise
         else:
-            if response.status_code not in _RETRYABLE_STATUS or last_attempt:
+            if response.status_code not in RETRYABLE_STATUS or last_attempt:
                 return response
             retry_after = _retry_after_seconds(response)
         await asyncio.sleep(_backoff(attempt, retry_after, retry))
