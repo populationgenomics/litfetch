@@ -473,3 +473,46 @@ async def test_europe_pmc_batch_resolver_leaves_no_pmc_hit_unenriched(
         enriched, abandoned = await resolvers.EuropePmcBatchResolver()([ids.ArticleIds(pmid='9')], s)
     assert enriched == [ids.ArticleIds(pmid='9')]
     assert abandoned == set()
+
+
+# --- default_batch_resolver ----------------------------------------------
+
+
+async def test_default_batch_resolver_routes_across_all_three_sources(
+    patch_transport: conftest.InstallTransport,
+) -> None:
+    oa_doi = '10.5555/openalex'
+    patch_transport(
+        {
+            # NCBI completes the pmid-only paper, gives the third paper only a doi, errors on the OA doi.
+            f'GET {_IDCONV_PATH}': [
+                httpx.Response(
+                    200,
+                    json={
+                        'records': [
+                            {'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI},
+                            {'requested-id': oa_doi, 'status': 'error'},
+                            {'pmid': 11, 'doi': '10.9999/c'},
+                        ]
+                    },
+                )
+            ],
+            # Europe PMC supplies the pmcid NCBI lacked for the pmid-only residue.
+            f'GET {_EPMC_SEARCH_PATH}': [
+                httpx.Response(200, json={'resultList': {'result': [{'id': '11', 'pmid': '11', 'pmcid': 'PMC11'}]}})
+            ],
+            # OpenAlex routes the doi-only paper NCBI could not.
+            f'GET {_OPENALEX_PATH}': [
+                httpx.Response(200, json={'results': [_openalex_work(oa_doi, pmid='77', pmcid='PMC77')]})
+            ],
+        }
+    )
+    batch = [ids.ArticleIds(pmid='9'), ids.ArticleIds(doi=oa_doi), ids.ArticleIds(pmid='11')]
+    async with sessions.Session() as s:
+        enriched, abandoned = await resolvers.default_batch_resolver()(batch, s)
+    assert enriched == [
+        ids.ArticleIds(pmid='9', pmcid='PMC9', doi=_DOI),
+        ids.ArticleIds(pmid='77', pmcid='PMC77', doi=oa_doi),
+        ids.ArticleIds(pmid='11', pmcid='PMC11', doi='10.9999/c'),
+    ]
+    assert abandoned == set()

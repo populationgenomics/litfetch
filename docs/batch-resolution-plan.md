@@ -236,16 +236,18 @@ together.
 
 ## Work in dependency order
 
+All steps complete.
+
 1. `BatchResolver` type + `chain_batch` driver (completion tracking, `required`,
    index-preserving pass-through, abandoned-set union). Testable against a stub
-   resolver. **Done.**
+   resolver.
 2. `_run_chunked` helper (key-based wire dedup, cap chunking, chunk-level retry,
-   abandoned-set), then the `NcbiIdConverterResolver` batch path (idtype-less
-   mixed batch, 200-id cap). Shares the record→`ArticleIds` mapping with the
-   per-item path.
+   abandoned-set), then the `NcbiIdConverterBatchResolver` (idtype-less mixed
+   batch, 200-id cap). Shares the record→`ArticleIds` mapping with the per-item
+   path.
 3. `OpenAlexResolver` (id-only `select`, doi-keyed 50-id OR-list, URL stripping),
    plus the `Rate.OPENALEX` member.
-4. `EuropePmcBatchResolver` (pmid-keyed OR'd `EXT_ID` search).
+4. `EuropePmcBatchResolver` (pmid-keyed OR'd `EXT_ID` search, 100-pmid cap).
 5. `default_batch_resolver()` wiring + `docs/api.md` reference.
 
 ## Open questions

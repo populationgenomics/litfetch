@@ -258,6 +258,70 @@ Resolvers stand alone as cross-reference tools — call one directly on an
 `ArticleIds` inside a session (`await EuropePmcResolver()(ids, session)`) without
 fetching anything.
 
+### Batch resolution
+
+Resolving one `ArticleIds` at a time re-pays each source's per-source rate domain
+per paper. A `BatchResolver` enriches a whole sequence in one pass, collapsing N
+lookups into `ceil(N / cap)` requests. Use it as an upfront pre-pass over a
+corpus, then fetch each body with an already-complete bundle
+(`fetch_body(enriched, resolver=None)`); `fetch_body` itself is unchanged.
+
+```python
+BatchResolver = Callable[
+    [Sequence[ArticleIds], Http],
+    Awaitable[tuple[Sequence[ArticleIds], set[int]]],
+]
+```
+
+Length- and order-preserving: result element `i` is input element `i`, merged
+(never overwriting a known id). The `set[int]` is the **abandoned indices** —
+elements whose lookup was given up on after retry-exhaustion (a transport failure
+or a 429/5xx that outlived every retry), still un-answered and *distinct from a
+definitive no-match*. Retry only that slice rather than re-running the whole
+batch; a genuine absence is never in the set. The failure signal rides this
+tuple — `ArticleIds` stays `str | None`.
+
+```python
+def chain_batch(*resolvers: BatchResolver, required=('pmid', 'pmcid', 'doi')) -> BatchResolver
+```
+
+Composes batch resolvers, feeding each only the elements still missing a
+`required` field (the per-element analogue of `chain`'s early-stop). `required`
+is parameterizable: a caller resolving for the PMC ladder passes `('pmcid',)` so
+later resolvers don't chase a `doi`/`pmid` the ladder never keys on. An index is
+in the returned abandoned set iff the element is *still* incomplete on `required`
+and some resolver abandoned it; one a later resolver completed is dropped.
+
+```python
+def default_batch_resolver() -> BatchResolver
+```
+
+The batteries-included keyless chain, symmetric with `default_resolver` and
+reaching the same coverage: `NcbiIdConverterBatchResolver` →
+`EuropePmcBatchResolver` → `OpenAlexResolver`.
+
+```python
+NcbiIdConverterBatchResolver(*, tool='litfetch')
+# any of pmid/pmcid/doi, one auto-detecting call per 200-id chunk (no idtype, so
+# a mixed-scheme batch resolves together). Shares the record mapping with the
+# per-item NcbiIdConverterResolver.
+
+EuropePmcBatchResolver()
+# pmid -> pmcid, OR-ing each 100-pmid chunk into one EXT_ID search. Covers the
+# UKPMC-only PMC ids NCBI lacks — why the batch chain reaches per-item parity.
+
+OpenAlexResolver()
+# doi -> pmid/pmcid via the works filter, 50 DOIs/call, id-only (no bibliographic
+# record). Covers the doi-bearing papers NCBI could not route. The session
+# contact is sent as mailto (polite pool); paces at Rate.OPENALEX.
+```
+
+Each dedups repeated ids on the wire (one lookup per distinct id, fanned back to
+every matching index) and self-chunks at its own cap; concurrency is bounded by
+the session's per-host pacer, not a per-resolver knob. A source with no bulk
+endpoint is simply not offered as a `BatchResolver` — compose it per-item and own
+that cost visibly rather than laundering N requests behind a batch signature.
+
 ## Access terms
 
 litfetch reports the licence / OA status of a fetched artifact (see `CONTEXT.md`)

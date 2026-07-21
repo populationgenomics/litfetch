@@ -15,6 +15,12 @@ The bundled resolvers are general (no pubmedifier coupling): Europe PMC search,
 NCBI's ID Converter, and Semantic Scholar.  Consumer-specific resolvers (a
 local cache, a corpus client) belong in the consumer and slot into the same
 :func:`chain`.
+
+For a whole corpus, the :data:`BatchResolver` surface (:func:`chain_batch`,
+:func:`default_batch_resolver`, and the batch resolver classes) enriches a
+sequence in one pass, amortizing each source's rate domain across N papers.  It
+is an upfront pre-pass; :func:`~litfetch.sessions.Session.fetch_body`'s per-item
+resolution is unchanged.
 """
 
 from __future__ import annotations
@@ -564,6 +570,20 @@ def chain_batch(
         return results, {index for index in abandoned if not results[index].has(required)}
 
     return _run
+
+
+def default_batch_resolver() -> BatchResolver:
+    """Build a batteries-included, keyless batch resolver chain.
+
+    NCBI's ID Converter batch (any scheme, one auto-detecting call), then Europe
+    PMC batch (the UKPMC-only ``pmid -> pmcid`` NCBI lacks), then OpenAlex (the
+    doi-bearing papers NCBI could not route) -- all auth-free.  The symmetric
+    batch analogue of :func:`default_resolver`, reaching the same coverage so a
+    caller can pre-pass a whole corpus and then fetch each body with an
+    already-complete bundle.  Add a keyed resolver to the :func:`chain_batch` for
+    broader coverage.
+    """
+    return chain_batch(NcbiIdConverterBatchResolver(), EuropePmcBatchResolver(), OpenAlexResolver())
 
 
 def _idconv_query(article_ids: ids.ArticleIds) -> tuple[str, str] | None:
