@@ -297,10 +297,16 @@ def _ncbi_batch_key(article_ids: ids.ArticleIds) -> str | None:
     """The wire id an id-type-less NCBI batch auto-detects for this element.
 
     Mirrors :func:`_idconv_query`'s pmid > pmcid > doi priority, but normalises a
-    PMCID to its ``PMC...`` form: without an explicit ``idtype`` a bare number
-    would be misdetected as a PMID.
+    PMCID to its ``PMC...`` form (without an explicit ``idtype`` a bare number
+    would be misdetected as a PMID) and lowercases a DOI so an id echoed in a
+    different case still correlates back (as the OpenAlex path does).
     """
-    return article_ids.pmid or _pmcid_with_prefix(article_ids.pmcid) or article_ids.doi
+    return article_ids.pmid or _pmcid_with_prefix(article_ids.pmcid) or _lower_doi(article_ids.doi)
+
+
+def _lower_doi(doi: str | None) -> str | None:
+    """Lowercase a DOI for case-insensitive correlation; ``None`` passes through."""
+    return doi.lower() if doi else None
 
 
 class NcbiIdConverterResolver:
@@ -373,8 +379,9 @@ class NcbiIdConverterBatchResolver:
             if rec.get('status') == 'error':
                 continue
             enrichment = _ncbi_record_to_ids(rec)
-            # Index under every echoed id form so an element keyed on any of them fans out.
-            for form in (enrichment.pmid, enrichment.pmcid, enrichment.doi):
+            # Index under every echoed id form so an element keyed on any of them
+            # fans out; the DOI form is lowercased to match _ncbi_batch_key.
+            for form in (enrichment.pmid, enrichment.pmcid, _lower_doi(enrichment.doi)):
                 if form is not None:
                     mapping[form] = enrichment
         return mapping
@@ -413,7 +420,7 @@ def _openalex_key(article_ids: ids.ArticleIds) -> str | None:
     query key, the wire filter, and the result correlation all agree.  A paper
     with no DOI is passed through untouched -- OpenAlex has nothing to key on.
     """
-    return article_ids.doi.lower() if article_ids.doi else None
+    return _lower_doi(article_ids.doi)
 
 
 def _openalex_bare_doi(value: object) -> str | None:
@@ -563,6 +570,9 @@ def chain_batch(
                 break
             enriched, sub_abandoned = await resolver([results[i] for i in pending], http)
             for position, index in enumerate(pending):
+                # merge, not assign: enriched[position] already preserves the input
+                # for a well-behaved resolver, but this defends the never-overwrite
+                # contract against one that does not (as per-item chain() does).
                 results[index] = results[index].merge(enriched[position])
                 if position in sub_abandoned:
                     abandoned.add(index)

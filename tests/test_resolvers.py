@@ -354,6 +354,20 @@ async def test_ncbi_batch_resolver_maps_mixed_scheme_in_one_call(
     assert 'idtype' not in transport.calls[0][1]  # auto-detect: no idtype sent
 
 
+async def test_ncbi_batch_resolver_correlates_doi_case_insensitively(
+    patch_transport: conftest.InstallTransport,
+) -> None:
+    # The element's DOI is upper-case; the ID Converter echoes its stored lower-case form.
+    upper = _DOI.upper()
+    patch_transport(
+        {f'GET {_IDCONV_PATH}': [httpx.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})]}
+    )
+    async with sessions.Session() as s:
+        enriched, abandoned = await resolvers.NcbiIdConverterBatchResolver()([ids.ArticleIds(doi=upper)], s)
+    assert enriched == [ids.ArticleIds(pmid='9', pmcid='PMC9', doi=upper)]  # correlated despite case
+    assert abandoned == set()
+
+
 async def test_ncbi_batch_resolver_dedups_repeated_doi(patch_transport: conftest.InstallTransport) -> None:
     transport = patch_transport(
         {f'GET {_IDCONV_PATH}': [httpx.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})]}
