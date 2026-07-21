@@ -420,3 +420,56 @@ async def test_openalex_resolver_leaves_unknown_doi_unenriched(patch_transport: 
         enriched, abandoned = await resolvers.OpenAlexResolver()([ids.ArticleIds(doi=_DOI)], s)
     assert enriched == [ids.ArticleIds(doi=_DOI)]  # definitive no-match, not abandoned
     assert abandoned == set()
+
+
+# --- Europe PMC batch resolver -------------------------------------------
+
+
+async def test_europe_pmc_batch_resolver_maps_many_pmids_in_one_call(
+    patch_transport: conftest.InstallTransport,
+) -> None:
+    transport = patch_transport(
+        {
+            f'GET {_EPMC_SEARCH_PATH}': [
+                httpx.Response(
+                    200,
+                    json={
+                        'resultList': {
+                            'result': [
+                                {'id': '9', 'pmid': '9', 'pmcid': 'PMC9'},
+                                {'id': '10', 'pmid': '10', 'pmcid': 'PMC10'},
+                            ]
+                        }
+                    },
+                )
+            ],
+        }
+    )
+    async with sessions.Session() as s:
+        enriched, abandoned = await resolvers.EuropePmcBatchResolver()(
+            [ids.ArticleIds(pmid='9'), ids.ArticleIds(pmid='10')], s
+        )
+    assert enriched == [ids.ArticleIds(pmid='9', pmcid='PMC9'), ids.ArticleIds(pmid='10', pmcid='PMC10')]
+    assert abandoned == set()
+    assert len(transport.calls) == 1  # both pmids OR'd into one query
+    query = transport.calls[0][1].replace('%3A', ':')
+    assert 'EXT_ID:9' in query
+    assert 'EXT_ID:10' in query
+
+
+async def test_europe_pmc_batch_resolver_passes_through_when_pmcid_known() -> None:
+    # A pmcid-bearing element mirrors the per-item no-op: it is never queried.
+    resolver = resolvers.EuropePmcBatchResolver()
+    enriched, abandoned = await resolver([ids.ArticleIds(pmid='9', pmcid='PMC9')], _NoHttp())
+    assert enriched == [ids.ArticleIds(pmid='9', pmcid='PMC9')]
+    assert abandoned == set()
+
+
+async def test_europe_pmc_batch_resolver_leaves_no_pmc_hit_unenriched(
+    patch_transport: conftest.InstallTransport,
+) -> None:
+    patch_transport({f'GET {_EPMC_SEARCH_PATH}': [httpx.Response(200, json={'resultList': {'result': []}})]})
+    async with sessions.Session() as s:
+        enriched, abandoned = await resolvers.EuropePmcBatchResolver()([ids.ArticleIds(pmid='9')], s)
+    assert enriched == [ids.ArticleIds(pmid='9')]
+    assert abandoned == set()

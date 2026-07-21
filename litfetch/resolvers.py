@@ -215,6 +215,63 @@ class EuropePmcResolver:
         return article_ids.merge(ids.ArticleIds(pmcid=_pmcid_with_prefix(records[0].get('pmcid'))))
 
 
+def _europe_pmc_batch_key(article_ids: ids.ArticleIds) -> str | None:
+    """The wire key for a batch Europe PMC lookup: the ``pmid``, only when no ``pmcid`` yet.
+
+    Mirrors :class:`EuropePmcResolver`'s no-op condition -- an element that
+    already has a ``pmcid``, or has no ``pmid`` to search on, is passed through
+    untouched rather than costing a slot in the OR-list.
+    """
+    return article_ids.pmid if article_ids.pmid and not article_ids.pmcid else None
+
+
+class EuropePmcBatchResolver:
+    """Batch ``pmid -> pmcid`` via Europe PMC search, OR-ing many pmids per request.
+
+    Same source and purpose as :class:`EuropePmcResolver` (the UKPMC-only PMC ids
+    a PubMed-XML corpus lacks); only the fan-in differs.  The query OR-lists the
+    chunk's external ids -- ``(EXT_ID:a OR EXT_ID:b OR ...) AND SRC:MED`` -- and
+    each result carries its own ``pmid``/``pmcid``, correlated back by pmid.  The
+    OR-list is chunked to keep the GET query string bounded.
+    """
+
+    _CAP = 100
+
+    async def __call__(
+        self, article_ids: Sequence[ids.ArticleIds], http: _http.Http
+    ) -> tuple[list[ids.ArticleIds], set[int]]:
+        """Return the batch enriched with a ``pmcid`` where Europe PMC has one, and abandoned indices."""
+        return await _run_chunked(
+            article_ids, key=_europe_pmc_batch_key, cap=self._CAP, resolve_chunk=self._resolve_chunk, http=http
+        )
+
+    async def _resolve_chunk(self, pmids: Sequence[str], http: _http.Http) -> Mapping[str, ids.ArticleIds]:
+        """Map one chunk of pmids to ``{pmid: ArticleIds(pmcid=...)}`` for the hits with a PMC id."""
+        query = '(' + ' OR '.join(f'EXT_ID:{pmid}' for pmid in pmids) + ') AND SRC:MED'
+        params: dict[str, str | int] = {
+            'query': query,
+            'format': 'json',
+            'pageSize': len(pmids),
+            'resultType': 'lite',
+        }
+        data = await _get_json_or_abandon(
+            http,
+            f'{_EUROPE_PMC_BASE}/search',
+            params=params,
+            context='Europe PMC search batch',
+            rate=_http.Rate.DEFAULT,
+        )
+        if data is None:
+            return {}
+        mapping: dict[str, ids.ArticleIds] = {}
+        for rec in data.get('resultList', {}).get('result', []):
+            pmid = _as_str(rec.get('pmid')) or _as_str(rec.get('id'))
+            pmcid = _pmcid_with_prefix(_as_str(rec.get('pmcid')))
+            if pmid and pmcid:
+                mapping[pmid] = ids.ArticleIds(pmcid=pmcid)
+        return mapping
+
+
 def _ncbi_record_to_ids(rec: Mapping[str, object]) -> ids.ArticleIds:
     """Map one NCBI ID Converter record to an :class:`~litfetch.ids.ArticleIds`.
 
