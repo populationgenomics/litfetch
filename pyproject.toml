@@ -1,6 +1,6 @@
 [project]
 name = "litfetch"
-version = "0.1.0"
+version = "0.2.0"
 description = "Identifier -> the retrievable artifacts of a scholarly article: a pluggable source ladder + identifier resolvers."
 readme = "README.md"
 requires-python = ">=3.10"

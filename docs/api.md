@@ -258,6 +258,82 @@ Resolvers stand alone as cross-reference tools — call one directly on an
 `ArticleIds` inside a session (`await EuropePmcResolver()(ids, session)`) without
 fetching anything.
 
+### Batch resolution
+
+Resolving one `ArticleIds` at a time re-pays each source's per-source rate domain
+per paper. A `BatchResolver` enriches a whole sequence in one pass, collapsing N
+lookups into `ceil(N / cap)` requests. Use it as an upfront pre-pass over a
+corpus, then fetch each body with an already-complete bundle
+(`fetch_body(enriched, resolver=None)`); `fetch_body` itself is unchanged.
+
+```python
+BatchResolver = Callable[
+    [Sequence[ArticleIds], Http],
+    Awaitable[tuple[Sequence[ArticleIds], set[int]]],
+]
+```
+
+Length- and order-preserving: result element `i` is input element `i`, merged
+(never overwriting a known id).
+
+The `set[int]` is the **abandoned indices**. An index is a position in the input
+sequence — index `i` means "the whole `ArticleIds` at `batch[i]`", so the caller
+retries with `[batch[i] for i in abandoned]`. It is *not* a per-id-field flag: an
+`ArticleIds` never fails partially. An element is abandoned when it is still
+incomplete **and** some source gave up on it after retry-exhaustion (a transport
+failure, or a 429/5xx that outlived every retry) — never answered, as opposed to
+answered-with-no-match. Whatever a source *did* resolve for that element is still
+merged in; the index only says "un-answered, worth retrying". A genuine absence
+is never in the set, so retrying the abandoned slice converges instead of
+re-running (and re-paying for) the whole batch.
+
+Indices rather than the bundles themselves because the result is already aligned
+to the input by position, and because a repeated id resolves once but occupies
+several positions — indices name every position to retry without collapsing the
+repeats. The failure signal rides this tuple, so `ArticleIds` stays `str | None`
+(an id is known or not — a lookup's outcome is not a property of the id).
+
+```python
+def chain_batch(*resolvers: BatchResolver, required=('pmid', 'pmcid', 'doi')) -> BatchResolver
+```
+
+Composes batch resolvers, feeding each only the elements still missing a
+`required` field (the per-element analogue of `chain`'s early-stop). `required`
+is parameterizable: a caller resolving for the PMC ladder passes `('pmcid',)` so
+later resolvers don't chase a `doi`/`pmid` the ladder never keys on. An index is
+in the returned abandoned set iff the element is *still* incomplete on `required`
+and some resolver abandoned it; one a later resolver completed is dropped.
+
+```python
+def default_batch_resolver() -> BatchResolver
+```
+
+The batteries-included keyless chain, symmetric with `default_resolver` and
+reaching the same coverage: `NcbiIdConverterBatchResolver` →
+`EuropePmcBatchResolver` → `OpenAlexResolver`.
+
+```python
+NcbiIdConverterBatchResolver(*, tool='litfetch')
+# any of pmid/pmcid/doi, one auto-detecting call per 200-id chunk (no idtype, so
+# a mixed-scheme batch resolves together). Shares the record mapping with the
+# per-item NcbiIdConverterResolver.
+
+EuropePmcBatchResolver()
+# pmid -> pmcid, OR-ing each 100-pmid chunk into one EXT_ID search. Covers the
+# UKPMC-only PMC ids NCBI lacks — why the batch chain reaches per-item parity.
+
+OpenAlexResolver()
+# doi -> pmid/pmcid via the works filter, 50 DOIs/call, id-only (no bibliographic
+# record). Covers the doi-bearing papers NCBI could not route. The session
+# contact is sent as mailto (polite pool); paces at Rate.OPENALEX.
+```
+
+Each dedups repeated ids on the wire (one lookup per distinct id, fanned back to
+every matching index) and self-chunks at its own cap; concurrency is bounded by
+the session's per-host pacer, not a per-resolver knob. A source with no bulk
+endpoint is simply not offered as a `BatchResolver` — compose it per-item and own
+that cost visibly rather than laundering N requests behind a batch signature.
+
 ## Access terms
 
 litfetch reports the licence / OA status of a fetched artifact (see `CONTEXT.md`)
