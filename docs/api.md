@@ -274,12 +274,24 @@ BatchResolver = Callable[
 ```
 
 Length- and order-preserving: result element `i` is input element `i`, merged
-(never overwriting a known id). The `set[int]` is the **abandoned indices** —
-elements whose lookup was given up on after retry-exhaustion (a transport failure
-or a 429/5xx that outlived every retry), still un-answered and *distinct from a
-definitive no-match*. Retry only that slice rather than re-running the whole
-batch; a genuine absence is never in the set. The failure signal rides this
-tuple — `ArticleIds` stays `str | None`.
+(never overwriting a known id).
+
+The `set[int]` is the **abandoned indices**. An index is a position in the input
+sequence — index `i` means "the whole `ArticleIds` at `batch[i]`", so the caller
+retries with `[batch[i] for i in abandoned]`. It is *not* a per-id-field flag: an
+`ArticleIds` never fails partially. An element is abandoned when it is still
+incomplete **and** some source gave up on it after retry-exhaustion (a transport
+failure, or a 429/5xx that outlived every retry) — never answered, as opposed to
+answered-with-no-match. Whatever a source *did* resolve for that element is still
+merged in; the index only says "un-answered, worth retrying". A genuine absence
+is never in the set, so retrying the abandoned slice converges instead of
+re-running (and re-paying for) the whole batch.
+
+Indices rather than the bundles themselves because the result is already aligned
+to the input by position, and because a repeated id resolves once but occupies
+several positions — indices name every position to retry without collapsing the
+repeats. The failure signal rides this tuple, so `ArticleIds` stays `str | None`
+(an id is known or not — a lookup's outcome is not a property of the id).
 
 ```python
 def chain_batch(*resolvers: BatchResolver, required=('pmid', 'pmcid', 'doi')) -> BatchResolver

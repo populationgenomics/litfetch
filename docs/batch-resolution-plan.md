@@ -4,6 +4,20 @@ Plan for adding a **batched** resolver surface to litfetch: enrich a whole
 sequence of `ArticleIds` in one pass, amortizing each source's rate domain
 across N papers instead of paying it per paper.
 
+This is the **design record** — the decisions and the alternatives rejected on
+the way. The implemented surface (signatures, semantics, per-resolver caps) is
+documented once in [`api.md`](api.md#batch-resolution); this doc references it
+rather than restating it, so mechanical detail here may lag — `api.md` and the
+code are the source of truth.
+
+## Vocabulary
+
+- **Batch** — the whole input sequence handed to a `BatchResolver`.
+- **Chunk** — a subset of a batch that fits in one upstream request, sized to
+  that source's per-request **cap** (`chunk_size`): 200 ids for NCBI, 50 DOIs for
+  OpenAlex, 100 pmids for Europe PMC. A batch of N distinct ids becomes
+  `ceil(N / cap)` chunks, one request each.
+
 ## Principle
 
 **Identifier resolution is rate-domain-bound, and the rate domain is per-source,
@@ -214,22 +228,10 @@ belong in litfetch.
 
 ## Public surface
 
-Additions to `litfetch.resolvers` (accessed as a submodule, as today —
-`resolvers` is not re-exported through `litfetch.__all__`):
-
-- `BatchResolver` — the type alias, `(Sequence) -> (Sequence, abandoned set)`
-  (decision 1).
-- `chain_batch(*resolvers, required=...)` — the driver (decision 3).
-- `default_batch_resolver()` — the batteries-included keyless batch chain
-  (NCBI ID Converter batch → Europe PMC batch → OpenAlex), symmetric with
-  `default_resolver()`.
-- `OpenAlexResolver` — the new id-only works resolver (decision 2).
-- `EuropePmcBatchResolver` — the OR'd `EXT_ID` search resolver (decision 2).
-- The batch entry point on `NcbiIdConverterResolver` (decision 2).
-
-Internal: `_run_chunked` (decision 4) — the shared chunk/dedup/retry helper the
-resolvers delegate to, not part of the public surface.
-
+Added to `litfetch.resolvers` (a submodule, not re-exported through
+`litfetch.__all__`): the `BatchResolver` type, `chain_batch`,
+`default_batch_resolver`, and the three batch resolvers, plus the internal
+`_run_chunked` helper. Signatures and behaviour: [`api.md`](api.md#batch-resolution).
 Naming mirrors the per-item surface (`chain`/`chain_batch`,
 `default_resolver`/`default_batch_resolver`) so the two are discoverable
 together.
