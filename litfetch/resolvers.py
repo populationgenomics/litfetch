@@ -30,7 +30,7 @@ import dataclasses
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 
-import httpx
+import httpx2
 
 from litfetch import _http, ids, semantic_scholar
 
@@ -80,7 +80,7 @@ async def _get_json(
     """GET ``url`` and parse JSON, logging and swallowing transport errors."""
     try:
         resp = await http.get(url, params=params, rate=rate)
-    except httpx.HTTPError:
+    except httpx2.HTTPError:
         logger.exception('%s request failed', context)
         return None
     if resp.status_code != 200:
@@ -125,7 +125,7 @@ async def _get_json_or_abandon(
     """
     try:
         resp = await http.get(url, params=params, rate=rate)
-    except httpx.HTTPError as e:
+    except httpx2.HTTPError as e:
         raise _ChunkAbandonedError(f'{context}: transport failure') from e
     if resp.status_code in _http.RETRYABLE_STATUS:  # survived retries: never answered
         raise _ChunkAbandonedError(f'{context}: HTTP {resp.status_code} after retries')

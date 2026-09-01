@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 
 from litfetch import _http, ids, resolvers, sessions
@@ -18,7 +18,7 @@ class _NoHttp:
 
     contact: str | None = None
 
-    async def get(self, *_args: object, **_kwargs: object) -> httpx.Response:
+    async def get(self, *_args: object, **_kwargs: object) -> httpx2.Response:
         raise AssertionError('no request expected')
 
 
@@ -28,7 +28,7 @@ class _NoHttp:
 async def test_europe_pmc_resolver_resolves_pmid_to_pmcid(patch_transport: conftest.InstallTransport) -> None:
     patch_transport(
         {
-            f'GET {_EPMC_SEARCH_PATH}': [httpx.Response(200, json={'resultList': {'result': [{'pmcid': 'PMC9'}]}})],
+            f'GET {_EPMC_SEARCH_PATH}': [httpx2.Response(200, json={'resultList': {'result': [{'pmcid': 'PMC9'}]}})],
         }
     )
     async with sessions.Session() as s:
@@ -47,7 +47,7 @@ async def test_europe_pmc_resolver_noop_without_pmid() -> None:
 
 
 async def test_europe_pmc_resolver_returns_input_on_empty_result(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({f'GET {_EPMC_SEARCH_PATH}': [httpx.Response(200, json={'resultList': {'result': []}})]})
+    patch_transport({f'GET {_EPMC_SEARCH_PATH}': [httpx2.Response(200, json={'resultList': {'result': []}})]})
     article_ids = ids.ArticleIds(pmid='9')
     async with sessions.Session() as s:
         assert await resolvers.EuropePmcResolver()(article_ids, s) == article_ids
@@ -61,7 +61,7 @@ async def test_ncbi_resolver_maps_pmid_to_pmcid_and_doi(patch_transport: conftes
         {
             f'GET {_IDCONV_PATH}': [
                 # The live endpoint returns pmid as an int; the resolver must coerce it to str.
-                httpx.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})
+                httpx2.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})
             ],
         }
     )
@@ -74,7 +74,7 @@ async def test_ncbi_resolver_maps_pmid_to_pmcid_and_doi(patch_transport: conftes
 async def test_ncbi_resolver_noop_on_error_record(patch_transport: conftest.InstallTransport) -> None:
     patch_transport(
         {
-            f'GET {_IDCONV_PATH}': [httpx.Response(200, json={'records': [{'pmid': '9', 'status': 'error'}]})],
+            f'GET {_IDCONV_PATH}': [httpx2.Response(200, json={'records': [{'pmid': '9', 'status': 'error'}]})],
         }
     )
     article_ids = ids.ArticleIds(pmid='9')
@@ -93,7 +93,7 @@ async def test_s2_resolver_enriches_from_external_ids(patch_transport: conftest.
     patch_transport(
         {
             'GET /graph/v1/paper/PMID:9': [
-                httpx.Response(200, json={'externalIds': {'DOI': _DOI, 'PubMedCentral': '9', 'PubMed': 9}}),
+                httpx2.Response(200, json={'externalIds': {'DOI': _DOI, 'PubMedCentral': '9', 'PubMed': 9}}),
             ],
         }
     )
@@ -137,9 +137,9 @@ async def test_chain_stops_early_once_complete() -> None:
 async def test_default_resolver_composes_europe_pmc_then_ncbi(patch_transport: conftest.InstallTransport) -> None:
     patch_transport(
         {
-            f'GET {_EPMC_SEARCH_PATH}': [httpx.Response(200, json={'resultList': {'result': [{'pmcid': 'PMC9'}]}})],
+            f'GET {_EPMC_SEARCH_PATH}': [httpx2.Response(200, json={'resultList': {'result': [{'pmcid': 'PMC9'}]}})],
             f'GET {_IDCONV_PATH}': [
-                httpx.Response(200, json={'records': [{'pmid': '9', 'pmcid': 'PMC9', 'doi': _DOI}]})
+                httpx2.Response(200, json={'records': [{'pmid': '9', 'pmcid': 'PMC9', 'doi': _DOI}]})
             ],
         }
     )
@@ -237,11 +237,11 @@ class _StubHttp:
 
     contact: str | None = None
 
-    def __init__(self, *, response: httpx.Response | None = None, error: Exception | None = None) -> None:
+    def __init__(self, *, response: httpx2.Response | None = None, error: Exception | None = None) -> None:
         self._response = response
         self._error = error
 
-    async def get(self, *_args: object, **_kwargs: object) -> httpx.Response:
+    async def get(self, *_args: object, **_kwargs: object) -> httpx2.Response:
         if self._error is not None:
             raise self._error
         assert self._response is not None
@@ -303,19 +303,19 @@ async def test_run_chunked_passes_through_unkeyable_elements() -> None:
 
 
 async def test_get_json_or_abandon_raises_on_retryable_status() -> None:
-    http = _StubHttp(response=httpx.Response(429))
+    http = _StubHttp(response=httpx2.Response(429))
     with pytest.raises(resolvers._ChunkAbandonedError):
         await resolvers._get_json_or_abandon(http, 'http://x', params={}, context='c', rate=_http.Rate.DEFAULT)
 
 
 async def test_get_json_or_abandon_raises_on_transport_error() -> None:
-    http = _StubHttp(error=httpx.ConnectError('boom'))
+    http = _StubHttp(error=httpx2.ConnectError('boom'))
     with pytest.raises(resolvers._ChunkAbandonedError):
         await resolvers._get_json_or_abandon(http, 'http://x', params={}, context='c', rate=_http.Rate.DEFAULT)
 
 
 async def test_get_json_or_abandon_returns_none_on_non_retryable_status() -> None:
-    http = _StubHttp(response=httpx.Response(404))
+    http = _StubHttp(response=httpx2.Response(404))
     result = await resolvers._get_json_or_abandon(http, 'http://x', params={}, context='c', rate=_http.Rate.DEFAULT)
     assert result is None  # definitive dead end, not abandoned
 
@@ -329,7 +329,7 @@ async def test_ncbi_batch_resolver_maps_mixed_scheme_in_one_call(
     transport = patch_transport(
         {
             f'GET {_IDCONV_PATH}': [
-                httpx.Response(
+                httpx2.Response(
                     200,
                     json={
                         'records': [
@@ -360,7 +360,7 @@ async def test_ncbi_batch_resolver_correlates_doi_case_insensitively(
     # The element's DOI is upper-case; the ID Converter echoes its stored lower-case form.
     upper = _DOI.upper()
     patch_transport(
-        {f'GET {_IDCONV_PATH}': [httpx.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})]}
+        {f'GET {_IDCONV_PATH}': [httpx2.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})]}
     )
     async with sessions.Session() as s:
         enriched, abandoned = await resolvers.NcbiIdConverterBatchResolver()([ids.ArticleIds(doi=upper)], s)
@@ -370,7 +370,7 @@ async def test_ncbi_batch_resolver_correlates_doi_case_insensitively(
 
 async def test_ncbi_batch_resolver_dedups_repeated_doi(patch_transport: conftest.InstallTransport) -> None:
     transport = patch_transport(
-        {f'GET {_IDCONV_PATH}': [httpx.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})]}
+        {f'GET {_IDCONV_PATH}': [httpx2.Response(200, json={'records': [{'pmid': 9, 'pmcid': 'PMC9', 'doi': _DOI}]})]}
     )
     async with sessions.Session() as s:
         enriched, _ = await resolvers.NcbiIdConverterBatchResolver()(
@@ -399,7 +399,7 @@ async def test_openalex_resolver_maps_doi_to_pmid_and_pmcid(patch_transport: con
     transport = patch_transport(
         {
             f'GET {_OPENALEX_PATH}': [
-                httpx.Response(200, json={'results': [_openalex_work(_DOI, pmid='9', pmcid='PMC9')]})
+                httpx2.Response(200, json={'results': [_openalex_work(_DOI, pmid='9', pmcid='PMC9')]})
             ]
         }
     )
@@ -415,7 +415,7 @@ async def test_openalex_resolver_correlates_case_insensitively(patch_transport: 
     # The element's DOI is upper-case; OpenAlex echoes it lower-case. They must still correlate.
     upper = _DOI.upper()
     patch_transport(
-        {f'GET {_OPENALEX_PATH}': [httpx.Response(200, json={'results': [_openalex_work(_DOI, pmid='9')]})]}
+        {f'GET {_OPENALEX_PATH}': [httpx2.Response(200, json={'results': [_openalex_work(_DOI, pmid='9')]})]}
     )
     async with sessions.Session() as s:
         enriched, _ = await resolvers.OpenAlexResolver()([ids.ArticleIds(doi=upper)], s)
@@ -429,7 +429,7 @@ async def test_openalex_resolver_passes_through_doi_less_element() -> None:
 
 
 async def test_openalex_resolver_leaves_unknown_doi_unenriched(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({f'GET {_OPENALEX_PATH}': [httpx.Response(200, json={'results': []})]})
+    patch_transport({f'GET {_OPENALEX_PATH}': [httpx2.Response(200, json={'results': []})]})
     async with sessions.Session() as s:
         enriched, abandoned = await resolvers.OpenAlexResolver()([ids.ArticleIds(doi=_DOI)], s)
     assert enriched == [ids.ArticleIds(doi=_DOI)]  # definitive no-match, not abandoned
@@ -445,7 +445,7 @@ async def test_europe_pmc_batch_resolver_maps_many_pmids_in_one_call(
     transport = patch_transport(
         {
             f'GET {_EPMC_SEARCH_PATH}': [
-                httpx.Response(
+                httpx2.Response(
                     200,
                     json={
                         'resultList': {
@@ -482,7 +482,7 @@ async def test_europe_pmc_batch_resolver_passes_through_when_pmcid_known() -> No
 async def test_europe_pmc_batch_resolver_leaves_no_pmc_hit_unenriched(
     patch_transport: conftest.InstallTransport,
 ) -> None:
-    patch_transport({f'GET {_EPMC_SEARCH_PATH}': [httpx.Response(200, json={'resultList': {'result': []}})]})
+    patch_transport({f'GET {_EPMC_SEARCH_PATH}': [httpx2.Response(200, json={'resultList': {'result': []}})]})
     async with sessions.Session() as s:
         enriched, abandoned = await resolvers.EuropePmcBatchResolver()([ids.ArticleIds(pmid='9')], s)
     assert enriched == [ids.ArticleIds(pmid='9')]
@@ -500,7 +500,7 @@ async def test_default_batch_resolver_routes_across_all_three_sources(
         {
             # NCBI completes the pmid-only paper, gives the third paper only a doi, errors on the OA doi.
             f'GET {_IDCONV_PATH}': [
-                httpx.Response(
+                httpx2.Response(
                     200,
                     json={
                         'records': [
@@ -513,11 +513,11 @@ async def test_default_batch_resolver_routes_across_all_three_sources(
             ],
             # Europe PMC supplies the pmcid NCBI lacked for the pmid-only residue.
             f'GET {_EPMC_SEARCH_PATH}': [
-                httpx.Response(200, json={'resultList': {'result': [{'id': '11', 'pmid': '11', 'pmcid': 'PMC11'}]}})
+                httpx2.Response(200, json={'resultList': {'result': [{'id': '11', 'pmid': '11', 'pmcid': 'PMC11'}]}})
             ],
             # OpenAlex routes the doi-only paper NCBI could not.
             f'GET {_OPENALEX_PATH}': [
-                httpx.Response(200, json={'results': [_openalex_work(oa_doi, pmid='77', pmcid='PMC77')]})
+                httpx2.Response(200, json={'results': [_openalex_work(oa_doi, pmid='77', pmcid='PMC77')]})
             ],
         }
     )

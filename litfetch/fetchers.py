@@ -43,7 +43,7 @@ from collections.abc import Mapping
 from typing import Protocol
 
 import defusedxml.ElementTree
-import httpx
+import httpx2
 
 from litfetch import _doi, _http, artifacts, crossref, ids, semantic_scholar, unpaywall
 
@@ -176,7 +176,7 @@ async def fetch_jats_xml(
         url = _pmc_versioned_xml_url(numeric, version)
         try:
             resp = await http.get(url)
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             logger.exception('PMC OA fetch failed for %s', url)
             continue
         if resp.status_code == 200:
@@ -251,7 +251,7 @@ async def _download(http: _http.Http, file: artifacts.File, *, what: str) -> art
     try:
         # Publisher PDF links commonly redirect (openURL -> content/pdf, ...); follow them.
         resp = await http.get(file.uri, follow_redirects=True)
-    except httpx.HTTPError:
+    except httpx2.HTTPError:
         logger.exception('%s fetch failed for %s', what, file.uri)
         return None
     if resp.status_code != 200:
@@ -350,7 +350,7 @@ class PmcOaFetcher:
                 params['continuation-token'] = token
             try:
                 resp = await http.get(f'{_PMC_S3_BASE}/', params=params)
-            except httpx.HTTPError:
+            except httpx2.HTTPError:
                 logger.exception('PMC OA list failed for prefix %s', prefix)
                 return keys
             if resp.status_code != 200:
@@ -396,7 +396,7 @@ class EuropePmcFetcher:
         url = f'{_EUROPE_PMC_BASE}/PMC{numeric}/fullTextXML'
         try:
             resp = await http.get(url)
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             logger.exception('Europe PMC fetch failed for %s', url)
             return None
         if resp.status_code != 200 or not resp.content:
@@ -446,7 +446,7 @@ class ElsevierFetcher:
             return None
         try:
             resp = await http.get(link, headers={'X-ELS-APIKey': api_key, 'Accept': 'text/xml'})
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             logger.exception('Elsevier fetch failed for %s', link)
             return None
         if resp.status_code != 200 or not resp.content or not _elsevier_has_body(resp.content):
@@ -491,7 +491,7 @@ class SpringerFetcher:
         query = f'doi:{article_ids.doi}'
         try:
             resp = await http.get(_SPRINGER_BASE, params={'q': query, 'api_key': api_key})
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             logger.exception('Springer fetch failed for %s', article_ids.doi)
             return None
         if resp.status_code != 200 or not resp.content:
@@ -515,7 +515,7 @@ async def _fetch_impersonated(url: str, *, impersonate: str) -> bytes | None:
     """GET ``url`` with a browser TLS fingerprint via curl_cffi.
 
     bioRxiv's JATS host sits behind Cloudflare's fingerprint gate, which a plain
-    httpx client trips; curl_cffi impersonates a real browser's TLS/HTTP-2
+    httpx2 client trips; curl_cffi impersonates a real browser's TLS/HTTP-2
     fingerprint to pass it.  Raises a clear error when the optional extra is
     absent; returns ``None`` on a transport error or non-200.
     """
@@ -592,7 +592,7 @@ class BiorxivFetcher:
             url = f'{_BIORXIV_DETAILS_BASE}/{server}/{_doi.encode_doi_path(doi)}'
             try:
                 resp = await http.get(url)
-            except httpx.HTTPError:
+            except httpx2.HTTPError:
                 logger.exception('bioRxiv details lookup failed for %s', url)
                 continue
             if resp.status_code != 200:
@@ -780,7 +780,7 @@ async def _springer_meta_pdf(http: _http.Http, doi: str, api_key: str) -> tuple[
     """
     try:
         resp = await http.get(_SPRINGER_META_BASE, params={'q': f'doi:{doi}', 'api_key': api_key})
-    except httpx.HTTPError:
+    except httpx2.HTTPError:
         logger.exception('Springer Meta request failed for %s', doi)
         return None
     if resp.status_code != 200:

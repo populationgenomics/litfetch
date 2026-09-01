@@ -1,6 +1,6 @@
 [project]
 name = "litfetch"
-version = "0.2.0"
+version = "0.3.0"
 description = "Identifier -> the retrievable artifacts of a scholarly article: a pluggable source ladder + identifier resolvers."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,7 +21,7 @@ classifiers = [
 ]
 dependencies = [
   "defusedxml>=0.7",
-  "httpx>=0.28",
+  "httpx2>=2.0",
 ]
 
 [project.optional-dependencies]

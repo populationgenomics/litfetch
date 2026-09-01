@@ -98,12 +98,12 @@ without threading a shared record (resolving the open question below).
   (generalising `ElsevierFetcher` to any publisher) is deferred: it needs TDM
   token handling (see EZproxy/credentials below), and unentitled links 403.
 - **doi.org resolve** — **deferred.** Marginal coverage over Unpaywall's
-  `best_oa_location` for real friction: doi.org 30x-redirects (httpx doesn't
+  `best_oa_location` for real friction: doi.org 30x-redirects (httpx2 doesn't
   follow by default, and `Http.get` doesn't expose the option), and it is
   fetch-to-discover (a GET to classify by `content-type`, then a second GET to
   download — most redirects land on HTML anyway). If revisited: add
   `follow_redirects` to `Http.get` (opt-in) rather than enabling it globally
-  (httpx keeps custom auth headers across cross-origin redirects — a key-leak
+  (httpx2 keeps custom auth headers across cross-origin redirects — a key-leak
   footgun).
 
 ### 4. Opportunistic / later
