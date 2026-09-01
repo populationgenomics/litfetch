@@ -1,7 +1,7 @@
 """The Session facade: the object callers hold to run litfetch.
 
 See [ADR 0001](../docs/adr/0001-http-session-seam.md).  A :class:`Session` owns
-one ``httpx.AsyncClient`` (built by an injectable ``client_factory``) and the
+one ``httpx2.AsyncClient`` (built by an injectable ``client_factory``) and the
 per-host pacing state, and it is the concrete :class:`~litfetch._http.Http` the
 source and resolver layers issue requests on.  The library's operations --
 :meth:`~Session.fetch_body`, :meth:`~Session.list_files`,
@@ -30,13 +30,13 @@ import dataclasses
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 
-import httpx
+import httpx2
 
 from litfetch import _http, artifacts, ids, relations, resolvers, source_metadata
 from litfetch import fetchers as fetchers_
 
 
-def _default_client_factory(timeout: float, contact: str | None) -> Callable[[], httpx.AsyncClient]:
+def _default_client_factory(timeout: float, contact: str | None) -> Callable[[], httpx2.AsyncClient]:
     """Build the default client factory: a litfetch User-Agent and ``timeout``.
 
     A ``contact`` (an email) appends ``(mailto:<contact>)`` to the User-Agent for
@@ -44,8 +44,8 @@ def _default_client_factory(timeout: float, contact: str | None) -> Callable[[],
     """
     user_agent = f'{_http.USER_AGENT} (mailto:{contact})' if contact else _http.USER_AGENT
 
-    def factory() -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=timeout, headers={'User-Agent': user_agent})
+    def factory() -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(timeout=timeout, headers={'User-Agent': user_agent})
 
     return factory
 
@@ -58,7 +58,7 @@ class _HostPacer:
     next_allowed: float = 0.0
 
 
-def _is_cacheable(response: httpx.Response) -> bool:
+def _is_cacheable(response: httpx2.Response) -> bool:
     """Report whether a response is a deterministic outcome worth caching.
 
     2xx and 4xx-except-429 are stable answers (including a 404 "no record").  A
@@ -98,7 +98,7 @@ class Session:
     def __init__(
         self,
         *,
-        client_factory: Callable[[], httpx.AsyncClient] | None = None,
+        client_factory: Callable[[], httpx2.AsyncClient] | None = None,
         retry: _http.RetryPolicy = _http.DEFAULT_RETRY,
         timeout: float = _http.DEFAULT_TIMEOUT,
         contact: str | None = None,
@@ -106,9 +106,9 @@ class Session:
         self.contact = contact
         self._factory = client_factory or _default_client_factory(timeout, contact)
         self._retry = retry
-        self._client: httpx.AsyncClient | None = None
+        self._client: httpx2.AsyncClient | None = None
         self._pacers: dict[str, _HostPacer] = {}
-        self._cache: dict[object, httpx.Response] | None = None
+        self._cache: dict[object, httpx2.Response] | None = None
         self._parent: Session | None = None
 
     def scope(self) -> Session:
@@ -149,8 +149,8 @@ class Session:
         self._cache = None
 
     @property
-    def client(self) -> httpx.AsyncClient:
-        """The underlying httpx client (escape hatch); valid only inside the context."""
+    def client(self) -> httpx2.AsyncClient:
+        """The underlying httpx2 client (escape hatch); valid only inside the context."""
         if self._client is None:
             raise RuntimeError('Session.client is only available inside the context manager')
         return self._client
@@ -163,7 +163,7 @@ class Session:
         headers: Mapping[str, str] | None = None,
         rate: _http.Rate = _http.Rate.DEFAULT,
         follow_redirects: bool = False,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         """GET ``url``, paced per ``rate`` then retried per the session policy.
 
         ``follow_redirects`` is off by default (an API move should surface, not be

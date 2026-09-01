@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 
 from litfetch import ids, relations, sessions
 from tests import conftest
@@ -14,8 +14,8 @@ _PUB = '10.1002/adhm.202100934'
 async def test_related_ids_follows_preprint_to_published(patch_transport: conftest.InstallTransport) -> None:
     patch_transport(
         {
-            f'GET /details/biorxiv/{_PRE}': [httpx.Response(200, json={'collection': [{'published': _PUB}]})],
-            f'GET /works/{_PRE}': [httpx.Response(200, json={'message': {'relation': {}}})],
+            f'GET /details/biorxiv/{_PRE}': [httpx2.Response(200, json={'collection': [{'published': _PUB}]})],
+            f'GET /works/{_PRE}': [httpx2.Response(200, json={'message': {'relation': {}}})],
         }
     )
     related = await sessions.related_ids(ids.ArticleIds(doi=_PRE))
@@ -29,7 +29,7 @@ async def test_related_ids_finds_preprint_from_published(patch_transport: confte
     patch_transport(
         {
             f'GET /works/{_PUB}': [
-                httpx.Response(200, json={'message': {'relation': {'has-preprint': [{'id': _PRE, 'id-type': 'doi'}]}}})
+                httpx2.Response(200, json={'message': {'relation': {'has-preprint': [{'id': _PRE, 'id-type': 'doi'}]}}})
             ],
         }
     )
@@ -43,9 +43,9 @@ async def test_related_ids_dedupes_biorxiv_and_crossref(patch_transport: conftes
     # bioRxiv and Crossref both name the same published DOI -> one entry.
     patch_transport(
         {
-            f'GET /details/biorxiv/{_PRE}': [httpx.Response(200, json={'collection': [{'published': _PUB}]})],
+            f'GET /details/biorxiv/{_PRE}': [httpx2.Response(200, json={'collection': [{'published': _PUB}]})],
             f'GET /works/{_PRE}': [
-                httpx.Response(
+                httpx2.Response(
                     200, json={'message': {'relation': {'is-preprint-of': [{'id': _PUB, 'id-type': 'doi'}]}}}
                 )
             ],
@@ -61,9 +61,9 @@ async def test_related_ids_dedupes_across_case(patch_transport: conftest.Install
     # case-insensitive, so this is one entry, keeping bioRxiv's first-seen casing.
     patch_transport(
         {
-            f'GET /details/biorxiv/{_PRE}': [httpx.Response(200, json={'collection': [{'published': _PUB}]})],
+            f'GET /details/biorxiv/{_PRE}': [httpx2.Response(200, json={'collection': [{'published': _PUB}]})],
             f'GET /works/{_PRE}': [
-                httpx.Response(
+                httpx2.Response(
                     200,
                     json={'message': {'relation': {'is-preprint-of': [{'id': _PUB.upper(), 'id-type': 'doi'}]}}},
                 )

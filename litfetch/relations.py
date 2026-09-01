@@ -20,7 +20,7 @@ import enum
 import logging
 from typing import NamedTuple
 
-import httpx
+import httpx2
 
 from litfetch import _doi, _http, crossref, ids
 
@@ -83,7 +83,7 @@ async def _biorxiv_published(http: _http.Http, doi: str) -> str | None:
         url = f'{_BIORXIV_DETAILS_BASE}/{server}/{_doi.encode_doi_path(doi)}'
         try:
             resp = await http.get(url)
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             logger.exception('bioRxiv details lookup failed for %s', url)
             continue
         if resp.status_code != 200:

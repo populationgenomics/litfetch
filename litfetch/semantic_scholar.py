@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-import httpx
+import httpx2
 
 from litfetch import _doi, _http, ids
 
@@ -59,7 +59,7 @@ async def fetch_paper(
     rate = _http.Rate.S2_KEYED if api_key else _http.Rate.S2_UNKEYED
     try:
         resp = await http.get(f'{_PAPER_BASE}/{pid}', params={'fields': fields}, headers=headers, rate=rate)
-    except httpx.HTTPError:
+    except httpx2.HTTPError:
         logger.exception('Semantic Scholar request failed')
         return None
     if resp.status_code != 200:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-import httpx
+import httpx2
 import pytest
 
 from litfetch import _http, artifacts, fetchers, ids, sessions
@@ -38,7 +38,7 @@ async def test_pmc_oa_fetcher_short_circuits_when_no_pmcid() -> None:
 
 
 async def test_pmc_oa_fetcher_returns_jats_artifact(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({f'GET {_xml_path("9", 1)}': [httpx.Response(200, content=conftest.MINIMAL_JATS)]})
+    patch_transport({f'GET {_xml_path("9", 1)}': [httpx2.Response(200, content=conftest.MINIMAL_JATS)]})
     blob = await _fetch(fetchers.PmcOaFetcher(), ids.ArticleIds(pmcid='PMC9'), credentials=None)
     assert blob is not None
     assert blob.file.kind is artifacts.FileKind.BODY
@@ -51,9 +51,9 @@ async def test_pmc_oa_fetcher_returns_jats_artifact(patch_transport: conftest.In
 async def test_pmc_oa_fetcher_falls_through_404s(patch_transport: conftest.InstallTransport) -> None:
     transport = patch_transport(
         {
-            f'GET {_xml_path("9", 1)}': [httpx.Response(404)],
-            f'GET {_xml_path("9", 2)}': [httpx.Response(404)],
-            f'GET {_xml_path("9", 3)}': [httpx.Response(200, content=conftest.MINIMAL_JATS)],
+            f'GET {_xml_path("9", 1)}': [httpx2.Response(404)],
+            f'GET {_xml_path("9", 2)}': [httpx2.Response(404)],
+            f'GET {_xml_path("9", 3)}': [httpx2.Response(200, content=conftest.MINIMAL_JATS)],
         }
     )
     blob = await _fetch(fetchers.PmcOaFetcher(), ids.ArticleIds(pmcid='PMC9'), credentials=None)
@@ -63,7 +63,7 @@ async def test_pmc_oa_fetcher_falls_through_404s(patch_transport: conftest.Insta
 
 async def test_pmc_oa_fetcher_returns_none_when_all_404(patch_transport: conftest.InstallTransport) -> None:
     patch_transport(
-        {f'GET {_xml_path("9", v)}': [httpx.Response(404)] for v in range(1, fetchers._PMC_OA_MAX_VERSION + 1)}
+        {f'GET {_xml_path("9", v)}': [httpx2.Response(404)] for v in range(1, fetchers._PMC_OA_MAX_VERSION + 1)}
     )
     assert await _fetch(fetchers.PmcOaFetcher(), ids.ArticleIds(pmcid='PMC9'), credentials=None) is None
 
@@ -179,7 +179,7 @@ async def test_fetch_body_skips_unsatisfied_fetchers_without_resolver() -> None:
 
 
 async def test_default_dispatcher_returns_pmc_oa_end_to_end(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({f'GET {_xml_path("9", 1)}': [httpx.Response(200, content=conftest.MINIMAL_JATS)]})
+    patch_transport({f'GET {_xml_path("9", 1)}': [httpx2.Response(200, content=conftest.MINIMAL_JATS)]})
     blob = await sessions.fetch_body(ids.ArticleIds(pmcid='PMC9'))
     assert blob is not None
     assert blob.file.source == 'pmc_oa_s3'
@@ -195,7 +195,7 @@ _EPMC_FT_PATH = '/europepmc/webservices/rest/PMC9/fullTextXML'
 
 
 async def test_europe_pmc_fetches_for_known_pmcid(patch_transport: conftest.InstallTransport) -> None:
-    transport = patch_transport({f'GET {_EPMC_FT_PATH}': [httpx.Response(200, content=conftest.MINIMAL_JATS)]})
+    transport = patch_transport({f'GET {_EPMC_FT_PATH}': [httpx2.Response(200, content=conftest.MINIMAL_JATS)]})
     blob = await _fetch(fetchers.EuropePmcFetcher(), ids.ArticleIds(pmcid='PMC9'), credentials=None)
     assert blob is not None
     assert blob.file.source == 'europe_pmc'
@@ -215,8 +215,8 @@ _DETAILS_MEDRXIV = f'/details/medrxiv/{_BIORXIV_DOI}'
 _JATS_URL = 'https://www.biorxiv.org/content/test.source.xml'
 
 
-def _details(jats_url: str) -> httpx.Response:
-    return httpx.Response(200, json={'collection': [{'version': '1', 'jatsxml': jats_url}]})
+def _details(jats_url: str) -> httpx2.Response:
+    return httpx2.Response(200, json={'collection': [{'version': '1', 'jatsxml': jats_url}]})
 
 
 async def test_biorxiv_short_circuits_without_doi() -> None:
@@ -254,7 +254,7 @@ async def test_biorxiv_falls_back_to_medrxiv(
 ) -> None:
     patch_transport(
         {
-            f'GET {_DETAILS_BIORXIV}': [httpx.Response(200, json={'collection': []})],
+            f'GET {_DETAILS_BIORXIV}': [httpx2.Response(200, json={'collection': []})],
             f'GET {_DETAILS_MEDRXIV}': [_details(_JATS_URL)],
         }
     )
@@ -274,8 +274,8 @@ async def test_biorxiv_returns_none_when_no_jats(
 ) -> None:
     patch_transport(
         {
-            f'GET {_DETAILS_BIORXIV}': [httpx.Response(200, json={'collection': [{'version': '1'}]})],
-            f'GET {_DETAILS_MEDRXIV}': [httpx.Response(200, json={'collection': []})],
+            f'GET {_DETAILS_BIORXIV}': [httpx2.Response(200, json={'collection': [{'version': '1'}]})],
+            f'GET {_DETAILS_MEDRXIV}': [httpx2.Response(200, json={'collection': []})],
         }
     )
 
@@ -306,8 +306,8 @@ _ELS_ABSTRACT_ONLY = (
 )
 
 
-def _crossref_elsevier_link_resp() -> httpx.Response:
-    return httpx.Response(
+def _crossref_elsevier_link_resp() -> httpx2.Response:
+    return httpx2.Response(
         200,
         json={
             'message': {'link': [{'URL': _ELS_LINK, 'content-type': 'text/xml', 'intended-application': 'text-mining'}]}
@@ -334,7 +334,7 @@ async def test_elsevier_fetches_elsevier_xml_artifact(patch_transport: conftest.
     transport = patch_transport(
         {
             f'GET {_CROSSREF_PATH}': [_crossref_elsevier_link_resp()],
-            f'GET {_ELS_FETCH_PATH}': [httpx.Response(200, content=_ELS_FULL_TEXT)],
+            f'GET {_ELS_FETCH_PATH}': [httpx2.Response(200, content=_ELS_FULL_TEXT)],
         }
     )
     blob = await _fetch(fetchers.ElsevierFetcher(), ids.ArticleIds(doi=_DOI), credentials=_ELS_CREDS)
@@ -349,7 +349,7 @@ async def test_elsevier_returns_none_for_non_elsevier_doi(patch_transport: conft
     transport = patch_transport(
         {
             f'GET {_CROSSREF_PATH}': [
-                httpx.Response(
+                httpx2.Response(
                     200,
                     json={
                         'message': {'link': [{'URL': 'https://example.com/a.pdf', 'content-type': 'application/pdf'}]}
@@ -366,7 +366,7 @@ async def test_elsevier_returns_none_on_abstract_only(patch_transport: conftest.
     patch_transport(
         {
             f'GET {_CROSSREF_PATH}': [_crossref_elsevier_link_resp()],
-            f'GET {_ELS_FETCH_PATH}': [httpx.Response(200, content=_ELS_ABSTRACT_ONLY)],
+            f'GET {_ELS_FETCH_PATH}': [httpx2.Response(200, content=_ELS_ABSTRACT_ONLY)],
         }
     )
     assert await _fetch(fetchers.ElsevierFetcher(), ids.ArticleIds(doi=_DOI), credentials=_ELS_CREDS) is None
@@ -400,7 +400,7 @@ async def test_springer_returns_none_without_doi() -> None:
 
 
 async def test_springer_fetches_jats_body(patch_transport: conftest.InstallTransport) -> None:
-    transport = patch_transport({f'GET {_SPRINGER_PATH}': [httpx.Response(200, content=_SPRINGER_ENVELOPE)]})
+    transport = patch_transport({f'GET {_SPRINGER_PATH}': [httpx2.Response(200, content=_SPRINGER_ENVELOPE)]})
     blob = await _fetch(fetchers.SpringerFetcher(), ids.ArticleIds(doi=_DOI), credentials=_SPRINGER_CREDS)
     assert blob is not None
     assert blob.file.source == 'springer_oa'
@@ -419,7 +419,7 @@ async def test_springer_fetches_jats_body(patch_transport: conftest.InstallTrans
 
 async def test_springer_returns_none_without_article_body(patch_transport: conftest.InstallTransport) -> None:
     # A response with no OA article (e.g. non-OA DOI) carries no <body>.
-    patch_transport({f'GET {_SPRINGER_PATH}': [httpx.Response(200, content=b'<response><records/></response>')]})
+    patch_transport({f'GET {_SPRINGER_PATH}': [httpx2.Response(200, content=b'<response><records/></response>')]})
     assert await _fetch(fetchers.SpringerFetcher(), ids.ArticleIds(doi=_DOI), credentials=_SPRINGER_CREDS) is None
 
 
@@ -457,7 +457,7 @@ _S3_LIST_BODY = b"""<?xml version="1.0" encoding="UTF-8"?>
 
 
 async def test_list_files_supplementary_excludes_renditions(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({'GET /': [httpx.Response(200, content=_S3_LIST_BODY)]})
+    patch_transport({'GET /': [httpx2.Response(200, content=_S3_LIST_BODY)]})
     files = await sessions.list_files(
         ids.ArticleIds(pmcid='PMC9'), sources=(fetchers.PmcOaFetcher(),), kind=artifacts.FileKind.SUPPLEMENTARY
     )
@@ -481,7 +481,7 @@ async def test_list_files_noop_without_pmcid() -> None:
 
 
 async def test_list_files_body_returns_renditions(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({'GET /': [httpx.Response(200, content=_S3_LIST_BODY)]})
+    patch_transport({'GET /': [httpx2.Response(200, content=_S3_LIST_BODY)]})
     reps = await sessions.list_files(
         ids.ArticleIds(pmcid='PMC9'), sources=(fetchers.PmcOaFetcher(),), kind=artifacts.FileKind.BODY
     )
@@ -494,7 +494,7 @@ async def test_list_files_body_returns_renditions(patch_transport: conftest.Inst
 
 
 async def test_list_files_unfiltered_returns_both_kinds(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({'GET /': [httpx.Response(200, content=_S3_LIST_BODY)]})
+    patch_transport({'GET /': [httpx2.Response(200, content=_S3_LIST_BODY)]})
     files = await sessions.list_files(ids.ArticleIds(pmcid='PMC9'), sources=(fetchers.PmcOaFetcher(),))
     kinds = {f.filename: f.kind for f in files}
     assert kinds['PMC9.1.xml'] is artifacts.FileKind.BODY
@@ -502,7 +502,7 @@ async def test_list_files_unfiltered_returns_both_kinds(patch_transport: conftes
 
 
 async def test_fetch_file_routes_to_named_source(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({'GET /PMC9.1/data.csv': [httpx.Response(200, content=b'a,b\n1,2\n')]})
+    patch_transport({'GET /PMC9.1/data.csv': [httpx2.Response(200, content=b'a,b\n1,2\n')]})
     ref = artifacts.File(
         kind=artifacts.FileKind.SUPPLEMENTARY,
         source='pmc_oa_s3',
@@ -522,7 +522,7 @@ async def test_fetch_file_returns_none_for_unknown_source() -> None:
 
 
 async def test_fetch_file_downloads_rendition_bytes(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({'GET /PMC9.1/PMC9.1.pdf': [httpx.Response(200, content=b'%PDF-1.7 body')]})
+    patch_transport({'GET /PMC9.1/PMC9.1.pdf': [httpx2.Response(200, content=b'%PDF-1.7 body')]})
     rep = artifacts.File(
         kind=artifacts.FileKind.BODY,
         media_type=artifacts.PDF,
@@ -542,11 +542,11 @@ _UNPAYWALL_PATH = f'/v2/{_DOI}'
 _OA_PDF = 'https://oa.example/paper.pdf'
 
 
-def _unpaywall_record(pdf_url: str | None) -> httpx.Response:
+def _unpaywall_record(pdf_url: str | None) -> httpx2.Response:
     best: dict[str, str] = {'license': 'cc-by'}
     if pdf_url is not None:
         best['url_for_pdf'] = pdf_url
-    return httpx.Response(200, json={'oa_status': 'gold', 'best_oa_location': best})
+    return httpx2.Response(200, json={'oa_status': 'gold', 'best_oa_location': best})
 
 
 async def test_unpaywall_lists_best_oa_pdf_as_body(patch_transport: conftest.InstallTransport) -> None:
@@ -578,7 +578,7 @@ async def test_unpaywall_declines_without_contact(patch_transport: conftest.Inst
 
 
 async def test_unpaywall_fetches_pdf_bytes(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({'GET /paper.pdf': [httpx.Response(200, content=b'%PDF-1.7 oa')]})
+    patch_transport({'GET /paper.pdf': [httpx2.Response(200, content=b'%PDF-1.7 oa')]})
     ref = artifacts.File(kind=artifacts.FileKind.BODY, source='unpaywall', media_type=artifacts.PDF, uri=_OA_PDF)
     blob = await sessions.fetch_file(ref, sources=(fetchers.UnpaywallFileSource(),))
     assert blob is not None
@@ -613,7 +613,7 @@ _S2_PAPER_PATH = f'/graph/v1/paper/DOI:{_DOI}'
 
 
 async def test_s2_lists_open_access_pdf_as_body(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({f'GET {_S2_PAPER_PATH}': [httpx.Response(200, json={'openAccessPdf': {'url': _OA_PDF}})]})
+    patch_transport({f'GET {_S2_PAPER_PATH}': [httpx2.Response(200, json={'openAccessPdf': {'url': _OA_PDF}})]})
     files = await sessions.list_files(ids.ArticleIds(doi=_DOI), sources=(fetchers.SemanticScholarFileSource(),))
     assert len(files) == 1
     assert files[0].kind is artifacts.FileKind.BODY
@@ -623,7 +623,7 @@ async def test_s2_lists_open_access_pdf_as_body(patch_transport: conftest.Instal
 
 
 async def test_s2_lists_nothing_without_pdf(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({f'GET {_S2_PAPER_PATH}': [httpx.Response(200, json={'openAccessPdf': None})]})
+    patch_transport({f'GET {_S2_PAPER_PATH}': [httpx2.Response(200, json={'openAccessPdf': None})]})
     assert await sessions.list_files(ids.ArticleIds(doi=_DOI), sources=(fetchers.SemanticScholarFileSource(),)) == ()
 
 
@@ -632,7 +632,7 @@ async def test_s2_file_source_noop_without_any_id() -> None:
 
 
 async def test_s2_fetches_pdf_bytes(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({'GET /paper.pdf': [httpx.Response(200, content=b'%PDF-1.7 s2')]})
+    patch_transport({'GET /paper.pdf': [httpx2.Response(200, content=b'%PDF-1.7 s2')]})
     ref = artifacts.File(kind=artifacts.FileKind.BODY, source='semantic_scholar', media_type=artifacts.PDF, uri=_OA_PDF)
     blob = await sessions.fetch_file(ref, sources=(fetchers.SemanticScholarFileSource(),))
     assert blob is not None
@@ -645,8 +645,8 @@ _TDM_PDF = 'https://publisher.example/article.pdf'
 _TDM_XML = 'https://publisher.example/article.xml'
 
 
-def _crossref_tdm_links() -> httpx.Response:
-    return httpx.Response(
+def _crossref_tdm_links() -> httpx2.Response:
+    return httpx2.Response(
         200,
         json={
             'message': {
@@ -676,7 +676,7 @@ async def test_crossref_noop_without_doi() -> None:
 
 
 async def test_crossref_fetches_tdm_bytes(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({'GET /article.pdf': [httpx.Response(200, content=b'%PDF-1.7 tdm')]})
+    patch_transport({'GET /article.pdf': [httpx2.Response(200, content=b'%PDF-1.7 tdm')]})
     ref = artifacts.File(kind=artifacts.FileKind.BODY, source='crossref_tdm', media_type=artifacts.PDF, uri=_TDM_PDF)
     blob = await sessions.fetch_file(ref, sources=(fetchers.CrossrefFileSource(),))
     assert blob is not None
@@ -690,11 +690,11 @@ _SPRINGER_META_CREDS = {'springer_meta_api_key': 'mk'}
 _SPRINGER_PDF = f'https://link.springer.com/openurl/pdf?id=doi:{_DOI}'
 
 
-def _springer_meta(pdf_url: str | None, *, oa: bool) -> httpx.Response:
+def _springer_meta(pdf_url: str | None, *, oa: bool) -> httpx2.Response:
     url = [{'format': 'html', 'value': 'http://link.springer.com/openurl/fulltext'}]
     if pdf_url:
         url.append({'format': 'pdf', 'value': pdf_url})
-    return httpx.Response(200, json={'records': [{'openaccess': 'true' if oa else 'false', 'url': url}]})
+    return httpx2.Response(200, json={'records': [{'openaccess': 'true' if oa else 'false', 'url': url}]})
 
 
 async def test_springer_filesource_lists_oa_pdf(patch_transport: conftest.InstallTransport) -> None:
@@ -732,13 +732,13 @@ async def test_springer_filesource_noop_without_pdf(patch_transport: conftest.In
 
 async def test_springer_filesource_fetch_follows_openurl_redirect() -> None:
     # openURL 301 -> content/pdf -> 200 pdf; _download follows the redirect.
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == '/openurl/pdf':
             location = f'https://link.springer.com/content/pdf/{_DOI}?pdf=openurl'
-            return httpx.Response(301, headers={'Location': location})
-        return httpx.Response(200, content=b'%PDF-1.7 springer')
+            return httpx2.Response(301, headers={'Location': location})
+        return httpx2.Response(200, content=b'%PDF-1.7 springer')
 
-    factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))  # noqa: E731
+    factory = lambda: httpx2.AsyncClient(transport=httpx2.MockTransport(handler))  # noqa: E731
     ref = artifacts.File(kind=artifacts.FileKind.BODY, source='springer', media_type=artifacts.PDF, uri=_SPRINGER_PDF)
     async with sessions.Session(client_factory=factory) as s:
         blob = await fetchers.SpringerFileSource().fetch_file(ref, http=s)

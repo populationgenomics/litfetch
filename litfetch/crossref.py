@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-import httpx
+import httpx2
 
 from litfetch import _doi, _http
 
@@ -39,7 +39,7 @@ async def fetch_work(doi: str, *, http: _http.Http, mailto: str | None = None) -
     params = {'mailto': mailto} if mailto else {}
     try:
         resp = await http.get(f'{_CROSSREF_BASE}/{_doi.encode_doi_path(doi)}', params=params)
-    except httpx.HTTPError:
+    except httpx2.HTTPError:
         logger.exception('Crossref lookup failed for %s', doi)
         return None
     if resp.status_code != 200:

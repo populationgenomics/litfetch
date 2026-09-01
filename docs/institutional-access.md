@@ -50,7 +50,7 @@ async def _rewrite(request):
         request.headers['Host'] = new
 
 def factory():
-    return httpx.AsyncClient(headers={'Cookie': cookie}, event_hooks={'request': [_rewrite]})
+    return httpx2.AsyncClient(headers={'Cookie': cookie}, event_hooks={'request': [_rewrite]})
 
 async with litfetch.Session(client_factory=factory) as entitled:
     ...

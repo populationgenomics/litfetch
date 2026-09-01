@@ -1,11 +1,11 @@
-"""Shared test fixtures: a scripted, offline httpx transport."""
+"""Shared test fixtures: a scripted, offline httpx2 transport."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
 
-import httpx
+import httpx2
 import pytest
 
 MINIMAL_JATS = b"""<?xml version='1.0'?>
@@ -26,14 +26,14 @@ MINIMAL_JATS = b"""<?xml version='1.0'?>
 """
 
 
-class RecordingTransport(httpx.AsyncBaseTransport):
+class RecordingTransport(httpx2.AsyncBaseTransport):
     """Drive a scripted sequence of responses keyed by ``METHOD path``."""
 
-    def __init__(self, scripts: dict[str, list[httpx.Response]]) -> None:
+    def __init__(self, scripts: dict[str, list[httpx2.Response]]) -> None:
         self._scripts = scripts
         self.calls: list[tuple[str, str, dict | None]] = []
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Record the request and return the next scripted response for it."""
         key = f'{request.method} {request.url.path}'
         body: dict | None = None
@@ -46,22 +46,22 @@ class RecordingTransport(httpx.AsyncBaseTransport):
         return queue.pop(0)
 
 
-InstallTransport = Callable[[dict[str, list[httpx.Response]]], RecordingTransport]
+InstallTransport = Callable[[dict[str, list[httpx2.Response]]], RecordingTransport]
 
 
 @pytest.fixture
 def patch_transport(monkeypatch: pytest.MonkeyPatch) -> InstallTransport:
-    """Return an installer that routes all ``httpx.AsyncClient`` traffic to a script."""
+    """Return an installer that routes all ``httpx2.AsyncClient`` traffic to a script."""
 
-    def install(scripts: dict[str, list[httpx.Response]]) -> RecordingTransport:
+    def install(scripts: dict[str, list[httpx2.Response]]) -> RecordingTransport:
         transport = RecordingTransport(scripts)
-        original = httpx.AsyncClient.__init__
+        original = httpx2.AsyncClient.__init__
 
-        def patched_init(client: httpx.AsyncClient, *args: object, **kwargs: object) -> None:
+        def patched_init(client: httpx2.AsyncClient, *args: object, **kwargs: object) -> None:
             kwargs['transport'] = transport
             original(client, *args, **kwargs)  # type: ignore[arg-type]
 
-        monkeypatch.setattr(httpx.AsyncClient, '__init__', patched_init)
+        monkeypatch.setattr(httpx2.AsyncClient, '__init__', patched_init)
         return transport
 
     return install

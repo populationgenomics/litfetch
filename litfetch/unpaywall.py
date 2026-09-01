@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-import httpx
+import httpx2
 
 from litfetch import _doi, _http, ids
 
@@ -46,7 +46,7 @@ async def fetch_record(
     url = f'{_UNPAYWALL_BASE}/{_doi.encode_doi_path(article_ids.doi)}'
     try:
         resp = await http.get(url, params={'email': email})
-    except httpx.HTTPError:
+    except httpx2.HTTPError:
         logger.exception('Unpaywall request failed for %s', article_ids.doi)
         return None
     if resp.status_code != 200:

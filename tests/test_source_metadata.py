@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 
 from litfetch import artifacts, ids, serde, sessions, source_metadata
 from tests import conftest
@@ -93,7 +93,7 @@ async def test_resolve_access_returns_licence_and_oa_status(patch_transport: con
     patch_transport(
         {
             f'GET {_UNPAYWALL_PATH}': [
-                httpx.Response(
+                httpx2.Response(
                     200,
                     json={'is_oa': True, 'oa_status': 'gold', 'best_oa_location': {'license': 'cc-by'}},
                 )
@@ -110,7 +110,7 @@ async def test_resolve_access_handles_closed_record(patch_transport: conftest.In
     patch_transport(
         {
             f'GET {_UNPAYWALL_PATH}': [
-                httpx.Response(200, json={'is_oa': False, 'oa_status': 'closed', 'best_oa_location': None})
+                httpx2.Response(200, json={'is_oa': False, 'oa_status': 'closed', 'best_oa_location': None})
             ]
         }
     )
@@ -126,5 +126,5 @@ async def test_resolve_access_noop_without_doi() -> None:
 
 
 async def test_resolve_access_empty_on_not_found(patch_transport: conftest.InstallTransport) -> None:
-    patch_transport({f'GET {_UNPAYWALL_PATH}': [httpx.Response(404)]})
+    patch_transport({f'GET {_UNPAYWALL_PATH}': [httpx2.Response(404)]})
     assert await sessions.resolve_access(ids.ArticleIds(doi=_DOI), email=_EMAIL) == artifacts.SourceMetadata()

@@ -493,7 +493,7 @@ class Session:
     def __init__(
         self,
         *,
-        client_factory: Callable[[], httpx.AsyncClient] | None = None,
+        client_factory: Callable[[], httpx2.AsyncClient] | None = None,
         retry: RetryPolicy = <default>,
         timeout: float = 30.0,
         contact: str | None = None,
@@ -502,9 +502,9 @@ class Session:
     async def __aexit__(self, *exc) -> None  # closes it (a scope leaves it open)
     def scope(self) -> Session               # child with its own cache; see below
     @property
-    def client(self) -> httpx.AsyncClient    # escape hatch; valid only in-context
+    def client(self) -> httpx2.AsyncClient    # escape hatch; valid only in-context
     async def get(self, url, *, params=None, headers=None, rate=Rate.DEFAULT,
-                  follow_redirects=False) -> httpx.Response
+                  follow_redirects=False) -> httpx2.Response
     # operations: fetch_body, list_files, fetch_file, resolve_access, related_ids
 ```
 
@@ -514,7 +514,7 @@ or CA-cert configuration; the default builds a client with a litfetch
 `User-Agent` and `timeout`. `contact` (an email) is the caller's polite-pool
 identity — see [Contact](#contact) below. `get` paces per `rate` then issues a
 retrying GET (see [`RetryPolicy`](#retrypolicy)) — and, inside a `scope`, serves
-a repeat request from cache; `client` exposes the raw `httpx.AsyncClient` for
+a repeat request from cache; `client` exposes the raw `httpx2.AsyncClient` for
 what `get` doesn't cover (POST, streaming). `follow_redirects` is off by default
 (an API move should surface, not be chased silently); `fetch_file` downloads
 pass it through to follow publisher PDF redirects.
@@ -557,7 +557,7 @@ class Http(Protocol):
         headers: Mapping[str, str] | None = None,
         rate: Rate = Rate.DEFAULT,
         follow_redirects: bool = False,
-    ) -> httpx.Response
+    ) -> httpx2.Response
 ```
 
 The one-method surface a source or resolver depends on. `Session` implements it.

@@ -22,7 +22,7 @@ import random
 from collections.abc import Mapping
 from typing import Protocol
 
-import httpx
+import httpx2
 
 DEFAULT_TIMEOUT = 30.0
 # Base User-Agent, no contact. A caller who sets Session(contact=...) gets a
@@ -94,7 +94,7 @@ class Http(Protocol):
         headers: Mapping[str, str] | None = None,
         rate: Rate = Rate.DEFAULT,
         follow_redirects: bool = False,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         """GET ``url``, paced per ``rate`` and retried per the session policy."""
         ...
 
@@ -103,7 +103,7 @@ class Http(Protocol):
 class RetryPolicy:
     """How :func:`get` retries a transient failure.
 
-    A transient failure is an ``httpx.TransportError`` (timeout, connection
+    A transient failure is an ``httpx2.TransportError`` (timeout, connection
     reset) or a retryable status (429, 500, 502, 503, 504).  Backoff is
     exponential with full jitter -- ``uniform(0, base_delay * 2**attempt)`` --
     capped at ``max_delay``; a 429/503 ``Retry-After`` in integer seconds
@@ -126,23 +126,23 @@ DEFAULT_RETRY = RetryPolicy()
 
 
 async def get(
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     url: str,
     *,
     params: Mapping[str, str | int] | None = None,
     headers: Mapping[str, str] | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
     follow_redirects: bool = False,
-) -> httpx.Response:
+) -> httpx2.Response:
     """GET ``url``, retrying a transient failure per ``retry``.
 
-    Retries an ``httpx.TransportError`` or a retryable status (see
+    Retries an ``httpx2.TransportError`` or a retryable status (see
     :class:`RetryPolicy`) with backoff, then returns the final response --
     including a still-failing status, so the caller keeps its own status
     handling.  Re-raises the last transport error when every attempt fails.
 
     Args:
-        client: The httpx client to issue the request on.
+        client: The httpx2 client to issue the request on.
         url: The absolute URL to GET.
         params: Query parameters, if any.
         headers: Request headers, if any.
@@ -151,18 +151,18 @@ async def get(
             enable it to follow publisher PDF redirects).
 
     Returns:
-        The final :class:`httpx.Response` (a non-retryable status, or the last
+        The final :class:`httpx2.Response` (a non-retryable status, or the last
         response after exhausting retries).
 
     Raises:
-        httpx.TransportError: If every attempt fails at the transport layer.
+        httpx2.TransportError: If every attempt fails at the transport layer.
     """
     for attempt in range(retry.max_attempts):
         last_attempt = attempt == retry.max_attempts - 1
         retry_after: float | None = None
         try:
             response = await client.get(url, params=params, headers=headers, follow_redirects=follow_redirects)
-        except httpx.TransportError:
+        except httpx2.TransportError:
             if last_attempt:
                 raise
         else:
@@ -173,7 +173,7 @@ async def get(
     raise AssertionError('unreachable: the loop returns or raises on the last attempt')
 
 
-def _retry_after_seconds(response: httpx.Response) -> float | None:
+def _retry_after_seconds(response: httpx2.Response) -> float | None:
     """Parse a ``Retry-After`` header as integer seconds; ``None`` otherwise.
 
     The HTTP-date form is accepted by the spec but not used by the APIs

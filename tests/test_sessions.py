@@ -4,30 +4,30 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import httpx
+import httpx2
 import pytest
 
 from litfetch import _http, sessions
 
 
-def _counting_client(calls: list[str], responses: list[httpx.Response] | None = None) -> httpx.AsyncClient:
+def _counting_client(calls: list[str], responses: list[httpx2.Response] | None = None) -> httpx2.AsyncClient:
     """A client whose transport records each request URL and returns 200 (or a script)."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         calls.append(str(request.url))
-        return responses.pop(0) if responses else httpx.Response(200, text='ok')
+        return responses.pop(0) if responses else httpx2.Response(200, text='ok')
 
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
 
 
-def _factory(calls: list[str], responses: list[httpx.Response] | None = None) -> Callable[[], httpx.AsyncClient]:
+def _factory(calls: list[str], responses: list[httpx2.Response] | None = None) -> Callable[[], httpx2.AsyncClient]:
     return lambda: _counting_client(calls, responses)
 
 
 async def test_session_builds_and_closes_client() -> None:
-    built: list[httpx.AsyncClient] = []
+    built: list[httpx2.AsyncClient] = []
 
-    def factory() -> httpx.AsyncClient:
+    def factory() -> httpx2.AsyncClient:
         client = _counting_client([])
         built.append(client)
         return client
@@ -71,12 +71,12 @@ async def test_scope_inherits_contact() -> None:
 
 
 async def test_get_follows_redirects_only_when_asked() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == '/start':
-            return httpx.Response(301, headers={'Location': 'https://h/final'})
-        return httpx.Response(200, text='landed')
+            return httpx2.Response(301, headers={'Location': 'https://h/final'})
+        return httpx2.Response(200, text='landed')
 
-    factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))  # noqa: E731
+    factory = lambda: httpx2.AsyncClient(transport=httpx2.MockTransport(handler))  # noqa: E731
     async with sessions.Session(client_factory=factory) as s:
         not_followed = await s.get('https://h/start')
         followed = await s.get('https://h/start', follow_redirects=True)
@@ -156,7 +156,7 @@ async def test_bare_session_does_not_cache() -> None:
 
 async def test_scope_does_not_cache_transient_status() -> None:
     calls: list[str] = []
-    responses = [httpx.Response(503), httpx.Response(200, text='ok')]
+    responses = [httpx2.Response(503), httpx2.Response(200, text='ok')]
     factory = _factory(calls, responses)
     session_cm = sessions.Session(client_factory=factory, retry=_http.RetryPolicy(max_attempts=1))
     async with session_cm as session, session.scope() as s:
