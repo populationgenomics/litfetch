@@ -42,7 +42,6 @@ import logging
 import mimetypes
 import re
 import urllib.parse
-import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -396,7 +395,7 @@ def _root_localname(content: bytes) -> str | None:
     try:
         for _event, element in defusedxml.ElementTree.iterparse(io.BytesIO(content), events=('start',)):
             return element.tag.rsplit('}', 1)[-1]
-    except ET.ParseError:
+    except defusedxml.ElementTree.ParseError:
         return None
     return None
 
