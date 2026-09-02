@@ -19,8 +19,8 @@ consumer may OCR or store, and is out of litfetch's rendering scope regardless.
 ## Current state
 
 - **`fetch_body` ladder is XML-only.** Every ladder fetcher's `fetch()` returns
-  JATS (`PmcOaFetcher`, `EuropePmcFetcher`, `BiorxivFetcher`) or Elsevier XML
-  (`ElsevierFetcher`). None yields a PDF.
+  JATS (`EuropePmcBookshelfFetcher`, `PmcOaFetcher`, `EuropePmcFetcher`,
+  `BiorxivFetcher`) or Elsevier XML (`ElsevierFetcher`). None yields a PDF.
 - **The file-set already handles PDFs — but only for PMC OA.**
   `PmcOaFetcher.list_files` enumerates every rendition under the S3 prefix,
   tagging `.xml`/`.pdf`/… stems as `BODY` with `media_type` from

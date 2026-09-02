@@ -5,15 +5,15 @@ full-text body and any supplementary material — and fetch their bytes.
 
 litfetch is two cooperating seams:
 
-- a **fetch ladder** — pluggable `Fetcher` backends (PMC Open Access S3, Europe
-  PMC, Elsevier OA) tried in priority order; the first to serve the body wins,
-  returning a `Blob` (a `File` plus its bytes);
+- a **fetch ladder** — pluggable `Fetcher` backends (Europe PMC Bookshelf, PMC
+  Open Access S3, Europe PMC, Elsevier OA, Springer OA) tried in priority order;
+  the first to serve the body wins, returning a `Blob` (a `File` plus its bytes);
 - an optional **resolver layer** — pluggable `Resolver`s that enrich what you
-  know about a paper (`pmid` → `pmcid`/`doi`, etc.) so the ladder can act.
+  know about an article (`pmid` → `pmcid`/`doi`, etc.) so the ladder can act.
 
-You hand it an `ArticleIds` bundle (any of `pmid` / `pmcid` / `doi`). Resolution
-is **demand-driven**: a resolver only runs when the next fetcher needs an
-identifier you don't yet have, and runs at most once.
+You hand it an `ArticleIds` bundle (any of `pmid` / `pmcid` / `doi` / `bookid`).
+Resolution is **demand-driven**: a resolver only runs when the next fetcher needs
+a `pmid`, `pmcid`, or `doi` you don't yet have, and runs at most once.
 
 An article is modelled as a **file-set**: a collection of `File` references (the
 body in its various media types, plus supplementary material, distinguished by
@@ -91,7 +91,7 @@ blob = await fetch_body(ArticleIds(pmid='29622564'), resolver=my_resolver)
 
 Bundled resolvers are constructed with their config, then passed in the same
 slot. `chain(...)` composes several (yours first, fallbacks after); it stops
-once every identifier is known:
+once `pmid`, `pmcid`, and `doi` are all known:
 
 ```python
 from litfetch import ArticleIds, fetch_body
@@ -121,6 +121,17 @@ blob = await fetch_body(
     ArticleIds(doi='10.1016/j.cell.2020.01.001'),
     credentials={'elsevier_api_key': key},
 )
+```
+
+### A Bookshelf book part
+
+An NCBI Bookshelf book part — a GeneReviews chapter, say — is reached by its
+Bookshelf accession (`NBK` + digits), passed as `bookid`;
+[`ArticleIds`](docs/api.md#articleids) explains why the caller supplies it. The
+ladder fetches the BITS XML (JATS's book tag set) from Europe PMC:
+
+```python
+blob = await fetch_body(ArticleIds(bookid='NBK1247'))
 ```
 
 ### Supplementary material

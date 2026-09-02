@@ -1,7 +1,7 @@
 """litfetch: identifier -> the retrievable artifacts of a scholarly article.
 
-Hand :func:`fetch_body` an :class:`ArticleIds` bundle (any of pmid / pmcid / doi)
-and, optionally, a :data:`~litfetch.resolvers.Resolver` to fill in missing
+Hand :func:`fetch_body` an :class:`ArticleIds` bundle (any of pmid / pmcid / doi /
+bookid) and, optionally, a :data:`~litfetch.resolvers.Resolver` to fill in missing
 identifiers on demand.  A :class:`~litfetch.fetchers.Fetcher` ladder is tried in
 priority order; the first to serve the body yields a :class:`Blob` (a
 :class:`File` plus its bytes).  Supplementary material is discovered with
@@ -15,9 +15,14 @@ markdown via litdown) and storing them are the consumer's concern.  The bundled
 identifier resolvers (Europe PMC, NCBI ID Converter, Semantic Scholar) live in
 :mod:`litfetch.resolvers`; file-set listing and fetching live in
 :mod:`litfetch.fetchers`.
+
+Importing requires the ``litfetch`` distribution to be installed: ``__version__``
+and the HTTP ``User-Agent`` read its metadata.
 """
 
 from __future__ import annotations
+
+import importlib.metadata
 
 from litfetch._http import Http, Rate, RetryPolicy
 from litfetch.artifacts import (
@@ -31,6 +36,7 @@ from litfetch.fetchers import (
     BiorxivFetcher,
     CrossrefFileSource,
     ElsevierFetcher,
+    EuropePmcBookshelfFetcher,
     EuropePmcFetcher,
     Fetcher,
     FileSource,
@@ -54,7 +60,7 @@ from litfetch.sessions import (
 )
 from litfetch.source_metadata import extract_source_metadata
 
-__version__ = '0.2.0'
+__version__ = importlib.metadata.version('litfetch')
 
 __all__ = [
     'INSTITUTIONAL',
@@ -63,6 +69,7 @@ __all__ = [
     'Blob',
     'CrossrefFileSource',
     'ElsevierFetcher',
+    'EuropePmcBookshelfFetcher',
     'EuropePmcFetcher',
     'Fetcher',
     'File',

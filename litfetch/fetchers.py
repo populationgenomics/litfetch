@@ -15,6 +15,8 @@ walk and file-set union that drive them live as methods on
 
 Registered fetchers, in priority order (:func:`default_fetchers`):
 
+* :class:`EuropePmcBookshelfFetcher` -- Europe PMC's book endpoint for NCBI
+  Bookshelf book parts (a GeneReviews chapter, say).  Needs a ``bookid``.
 * :class:`PmcOaFetcher` -- the PMC Open Access S3 bucket (JATS body and open
   file-set).  Needs a ``pmcid``.
 * :class:`EuropePmcFetcher` -- Europe PMC's REST endpoint.  Needs a ``pmcid``.
@@ -35,6 +37,7 @@ for the rare correction case.
 
 from __future__ import annotations
 
+import io
 import logging
 import mimetypes
 import re
@@ -51,6 +54,9 @@ logger = logging.getLogger(__name__)
 
 _PMC_S3_BASE = 'https://pmc-oa-opendata.s3.amazonaws.com'
 _EUROPE_PMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
+_BOOKSHELF_ACCESSION = re.compile(r'NBK[0-9]+', re.IGNORECASE | re.ASCII)
+# Root of the envelope Europe PMC returns with HTTP 200 when it has no copy.
+_EUROPE_PMC_MISS_ROOT = 'fullTextXMLBean'
 _ELSEVIER_HOST = 'api.elsevier.com'
 _ELSEVIER_CREDENTIAL_KEY = 'elsevier_api_key'
 _S2_CREDENTIAL_KEY = 'semantic_scholar_api_key'
@@ -143,6 +149,21 @@ def _pmc_versioned_xml_url(numeric: str, version: int) -> str:
     """Construct the JATS XML URL for ``PMC{numeric}.{version}``."""
     stem = f'PMC{numeric}.{version}'
     return f'{_PMC_S3_BASE}/{stem}/{stem}.xml'
+
+
+def _bookshelf_accession(bookid: str) -> str:
+    """Return ``bookid`` as a canonical ``NBK<digits>`` Bookshelf accession.
+
+    Case-insensitive on input, upper-cased on output.
+
+    Raises:
+        ValueError: If ``bookid`` has any other shape, so a malformed id never
+            becomes a URL path segment.
+    """
+    candidate = bookid.strip()
+    if not _BOOKSHELF_ACCESSION.fullmatch(candidate):
+        raise ValueError(f'not an NCBI Bookshelf accession (NBK<digits>): {bookid!r}')
+    return candidate.upper()
 
 
 def _is_article_rendition(key: str) -> bool:
@@ -369,6 +390,40 @@ class PmcOaFetcher:
                 return keys
 
 
+def _root_localname(content: bytes) -> str | None:
+    """Return the root element's local name, reading no further than its start tag; ``None`` if not XML."""
+    try:
+        for _event, element in defusedxml.ElementTree.iterparse(io.BytesIO(content), events=('start',)):
+            return element.tag.rsplit('}', 1)[-1]
+    except defusedxml.ElementTree.ParseError:
+        return None
+    return None
+
+
+async def _europe_pmc_xml(http: _http.Http, url: str) -> bytes | None:
+    """GET a Europe PMC full-text URL; ``None`` when there is no copy or the request fails.
+
+    Shared by the article and book fetchers.  Europe PMC reports a miss two
+    ways: a 404 (the article endpoint), or a 200 whose body is a
+    ``<fullTextXMLBean>`` message envelope instead of the XML (the book
+    endpoint).  Both decline, as does an empty body; any other status is logged
+    as unexpected before declining.
+    """
+    try:
+        resp = await http.get(url)
+    except httpx2.HTTPError:
+        logger.exception('Europe PMC fetch failed for %s', url)
+        return None
+    if resp.status_code != 200 or not resp.content:
+        if resp.status_code not in (200, 404):
+            logger.warning('Unexpected status %d from Europe PMC for %s', resp.status_code, url)
+        return None
+    if _root_localname(resp.content) == _EUROPE_PMC_MISS_ROOT:
+        logger.debug('Europe PMC has no copy at %s', url)
+        return None
+    return resp.content
+
+
 class EuropePmcFetcher:
     """The Europe PMC REST source.
 
@@ -394,14 +449,8 @@ class EuropePmcFetcher:
             return None
         numeric = _pmc_numeric(article_ids.pmcid)
         url = f'{_EUROPE_PMC_BASE}/PMC{numeric}/fullTextXML'
-        try:
-            resp = await http.get(url)
-        except httpx2.HTTPError:
-            logger.exception('Europe PMC fetch failed for %s', url)
-            return None
-        if resp.status_code != 200 or not resp.content:
-            if resp.status_code not in (200, 404):
-                logger.warning('Unexpected status %d from Europe PMC for %s', resp.status_code, url)
+        content = await _europe_pmc_xml(http, url)
+        if content is None:
             return None
         return artifacts.Blob(
             file=artifacts.File(
@@ -410,7 +459,49 @@ class EuropePmcFetcher:
                 media_type=artifacts.JATS_XML,
                 uri=url,
             ),
-            content=resp.content,
+            content=content,
+        )
+
+
+class EuropePmcBookshelfFetcher:
+    """NCBI Bookshelf book parts via Europe PMC's book endpoint.
+
+    A single GET against ``/{bookid}/bookXML``, the sibling of the article
+    endpoint, keyed on the :class:`~litfetch.ids.ArticleIds` ``bookid``.  The
+    payload is BITS (the JATS Book Interchange Tag Set): a ``<book-part-wrapper>``
+    carrying the book's ``<book-meta>`` and the part's ``<book-part>``, served as
+    :data:`~litfetch.artifacts.JATS_XML`.  A ``bookid`` not of the form
+    ``NBK<digits>`` raises :class:`ValueError` rather than reaching the URL;
+    the check runs when the rung is reached, which on the default ladder (this
+    rung heads it) is at ladder entry for any bundle carrying a ``bookid``.
+    """
+
+    name = 'europe_pmc_bookshelf'
+    requires = frozenset({'bookid'})
+
+    async def fetch(
+        self,
+        article_ids: ids.ArticleIds,
+        *,
+        credentials: Mapping[str, object] | None = None,
+        http: _http.Http,
+    ) -> artifacts.Blob | None:
+        """Fetch the Europe PMC book XML for ``article_ids.bookid``."""
+        del credentials  # unused by this source
+        if article_ids.bookid is None:
+            return None
+        url = f'{_EUROPE_PMC_BASE}/{_bookshelf_accession(article_ids.bookid)}/bookXML'
+        content = await _europe_pmc_xml(http, url)
+        if content is None:
+            return None
+        return artifacts.Blob(
+            file=artifacts.File(
+                kind=artifacts.FileKind.BODY,
+                source=self.name,
+                media_type=artifacts.JATS_XML,
+                uri=url,
+            ),
+            content=content,
         )
 
 
@@ -863,11 +954,20 @@ def default_fetchers() -> tuple[Fetcher, ...]:
     """Return the production fetcher list, in priority order.
 
     Kept as a function so callers can prepend their own fetcher (e.g. a
-    read-only cache) without import-time side effects.  The Elsevier fetcher
-    sits last and reads its key from ``credentials``; a caller with no Elsevier
-    key makes it a no-op.
+    read-only cache) without import-time side effects.  The Bookshelf rung
+    heads the ladder: a present ``bookid`` is decisive (a book part has no
+    PMCID) and costs one GET, so a bundle carrying one is served before any PMC
+    rung or resolver call is spent chasing a PMCID that does not exist.  The
+    publisher fetchers sit last and read their keys from ``credentials``; a
+    caller with no key makes them no-ops.
     """
-    return (PmcOaFetcher(), EuropePmcFetcher(), ElsevierFetcher(), SpringerFetcher())
+    return (
+        EuropePmcBookshelfFetcher(),
+        PmcOaFetcher(),
+        EuropePmcFetcher(),
+        ElsevierFetcher(),
+        SpringerFetcher(),
+    )
 
 
 def default_file_sources() -> tuple[FileSource, ...]:

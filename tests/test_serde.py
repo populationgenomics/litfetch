@@ -6,8 +6,13 @@ from litfetch import artifacts, ids, serde
 
 
 def test_article_ids_round_trip() -> None:
-    value = ids.ArticleIds(pmid='1', pmcid='PMC1', doi='10.1/x')
+    value = ids.ArticleIds(pmid='1', pmcid='PMC1', doi='10.1/x', bookid='NBK1')
     assert serde.article_ids_from_dict(serde.article_ids_to_dict(value)) == value
+
+
+def test_article_ids_from_dict_tolerates_a_missing_field() -> None:
+    # A dict persisted before a field existed still loads; the field reads as unknown.
+    assert serde.article_ids_from_dict({'pmid': '1', 'pmcid': None, 'doi': None}) == ids.ArticleIds(pmid='1')
 
 
 def test_file_round_trip() -> None:

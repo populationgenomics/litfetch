@@ -212,21 +212,22 @@ class Session:
     ) -> artifacts.Blob | None:
         """Walk the fetcher ladder, resolving identifiers on demand, return the first hit.
 
-        When the next fetcher needs an identifier ``article_ids`` lacks, invokes
-        ``resolver`` once (memoised) to enrich the bundle, then continues.  Returns
-        the first non-``None`` body :class:`~litfetch.artifacts.Blob`, or ``None``
-        when nothing serves it.  The blob carries raw bytes; rendering it (e.g.
+        When the next fetcher needs a resolvable identifier
+        (:data:`~litfetch.ids.RESOLVABLE`) ``article_ids`` lacks, invokes
+        ``resolver`` once (memoised) to enrich the bundle, then continues; a
+        fetcher whose requirement is still unmet is skipped.  Returns the first
+        non-``None`` body :class:`~litfetch.artifacts.Blob`, or ``None`` when
+        nothing serves it.  The blob carries raw bytes; rendering it (e.g.
         XML -> markdown) is the caller's concern.
         """
         chosen = tuple(fetchers) if fetchers is not None else fetchers_.default_fetchers()
         resolved = False
         for fetcher in chosen:
+            if resolver is not None and not resolved and not article_ids.has(fetcher.requires & ids.RESOLVABLE):
+                article_ids = article_ids.merge(await resolver(article_ids, self))
+                resolved = True
             if not article_ids.has(fetcher.requires):
-                if resolver is not None and not resolved:
-                    article_ids = article_ids.merge(await resolver(article_ids, self))
-                    resolved = True
-                if not article_ids.has(fetcher.requires):
-                    continue
+                continue
             blob = await fetcher.fetch(article_ids, credentials=credentials, http=self)
             if blob is not None:
                 return blob

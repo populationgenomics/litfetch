@@ -77,6 +77,61 @@ def test_pdf_carries_no_extractable_licence() -> None:
     assert meta == artifacts.SourceMetadata()
 
 
+# --- BITS book parts (Bookshelf) -----------------------------------------
+
+_BOOK_TERMS = 'https://publisher.example/book-terms'
+_PART_TERMS = 'https://publisher.example/part-terms'
+_FIGURE_TERMS = 'https://publisher.example/figure-terms'
+_COPYRIGHT_ONLY = '<permissions><copyright-statement>Copyright 2024 A Publisher.</copyright-statement></permissions>'
+
+
+def _licence(href: str, *, license_type: str | None = None) -> str:
+    attrs = f' license-type="{license_type}"' if license_type else ''
+    return f'<permissions><license{attrs} xlink:href="{href}"><license-p>Terms.</license-p></license></permissions>'
+
+
+def _bits(*, book_meta: str = '', book_part_meta: str = '', body: str = '<p>Body.</p>') -> bytes:
+    """A synthetic BITS book part: the book's metadata, then the part with its own metadata and body."""
+    return f"""<?xml version='1.0'?>
+<book-part-wrapper xmlns:xlink="http://www.w3.org/1999/xlink">
+  <book-meta>{book_meta}</book-meta>
+  <book-part book-part-type="chapter">
+    <book-part-meta>{book_part_meta}</book-part-meta>
+    <body><sec>{body}</sec></body>
+  </book-part>
+</book-part-wrapper>
+""".encode()
+
+
+def test_bits_part_terms_win_over_book_terms() -> None:
+    content = _bits(
+        book_meta=_licence(_BOOK_TERMS, license_type='open-access'),
+        book_part_meta=_licence(_PART_TERMS),
+    )
+    meta = source_metadata.extract_source_metadata(_blob(content, artifacts.JATS_XML))
+    # The part's own licence is reported whole: nothing (not even `access`) is blended in from the book's.
+    assert meta == artifacts.SourceMetadata(licence=_PART_TERMS, access=None, basis='artifact')
+
+
+def test_bits_falls_back_to_book_terms() -> None:
+    content = _bits(book_meta=_licence(_BOOK_TERMS, license_type='open-access'), book_part_meta=_COPYRIGHT_ONLY)
+    meta = source_metadata.extract_source_metadata(_blob(content, artifacts.JATS_XML))
+    assert meta == artifacts.SourceMetadata(licence=_BOOK_TERMS, access='open-access', basis='artifact')
+
+
+def test_bits_without_licence_yields_empty() -> None:
+    content = _bits(book_meta=_COPYRIGHT_ONLY)
+    meta = source_metadata.extract_source_metadata(_blob(content, artifacts.JATS_XML))
+    assert meta == artifacts.SourceMetadata()
+
+
+def test_bits_ignores_licence_outside_the_metadata_blocks() -> None:
+    # A figure's own permissions are not the part's terms.
+    content = _bits(body=f'<fig>{_licence(_FIGURE_TERMS)}<graphic xlink:href="f1.png"/></fig>')
+    meta = source_metadata.extract_source_metadata(_blob(content, artifacts.JATS_XML))
+    assert meta == artifacts.SourceMetadata()
+
+
 def test_source_metadata_round_trips_through_serde() -> None:
     meta = artifacts.SourceMetadata(licence='CC-BY-4.0', access='open-access', basis='unpaywall')
     assert serde.source_metadata_from_dict(serde.source_metadata_to_dict(meta)) == meta

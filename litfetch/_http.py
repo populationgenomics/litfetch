@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import enum
+import importlib.metadata
 import random
 from collections.abc import Mapping
 from typing import Protocol
@@ -28,7 +29,7 @@ DEFAULT_TIMEOUT = 30.0
 # Base User-Agent, no contact. A caller who sets Session(contact=...) gets a
 # `(mailto:...)` appended and that address fed to the polite-pool params; litfetch
 # ships no default contact of its own.
-USER_AGENT = 'litfetch/0.1'
+USER_AGENT = f'litfetch/{importlib.metadata.version("litfetch")}'
 
 # Status codes worth retrying: 429 (rate limited) and the transient 5xx family.
 # A 4xx other than 429 is the caller's fault and will not fix itself on retry.

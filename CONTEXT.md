@@ -10,12 +10,16 @@ consumer stores them* nor *how they are rendered* (e.g. XML → markdown).
 ### Identity
 
 **Article**:
-A scholarly paper litfetch retrieves, identified by an `ArticleIds` bundle.
-*Avoid*: paper, document, work, record (a `record` is the consumer's cached wrapper).
+The unit litfetch retrieves, identified by an `ArticleIds` bundle: a journal
+article, or an NCBI Bookshelf **book part** (BITS's term — a GeneReviews chapter
+is one). Either way, one identity, one file-set, one body.
+*Avoid*: paper, document, work, record (a `record` is the consumer's cached
+wrapper). When the Bookshelf case itself needs naming, say *book part*.
 
 **ArticleIds**:
-The immutable identity bundle — any of `pmid`, `pmcid`, `doi`. A thin record;
-resolvers enrich it, sources consume whichever identifier they `require`.
+The immutable identity bundle — any of `pmid`, `pmcid`, `doi`, `bookid` (an NCBI
+Bookshelf accession, naming a book part). A thin record; resolvers enrich it,
+sources consume whichever identifier they `require`.
 *Avoid*: identifiers, keys, ids.
 
 ### The file-set
