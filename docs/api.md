@@ -31,10 +31,20 @@ class ArticleIds:
     pmid: str | None = None
     pmcid: str | None = None
     doi: str | None = None
+    bookid: str | None = None
 ```
 
-The immutable identity bundle — any subset of `pmid` / `pmcid` / `doi`.
-Resolvers enrich it; fetchers consume whichever identifier they `require`.
+The immutable identity bundle — any subset of `pmid` / `pmcid` / `doi` /
+`bookid`. Resolvers enrich it; fetchers consume whichever identifier they
+`require`.
+
+`pmid`, `pmcid`, and `doi` are the **resolvable** identifiers
+(`litfetch.ids.RESOLVABLE`): a resolver can supply any of them from another, and
+[`fetch_body`](#fetch_body)'s demand-driven resolution, [`chain`](#chain)'s stop
+condition, and [`chain_batch`](#batch-resolution)'s `required` all key on this
+set. `bookid` is an NCBI Bookshelf accession (`NBK` + digits) naming a book
+part — a GeneReviews chapter, say. A book part has no PMCID, and no resolver is
+asked for its accession; PubMed's record carries it, so the caller supplies it.
 
 - `merge(self, other: ArticleIds) -> ArticleIds` — fill this bundle's gaps from
   `other`; a known identifier is never overwritten.
@@ -57,10 +67,12 @@ async def fetch_body(          # also Session.fetch_body(self, ...)
 
 Walk the fetcher ladder in priority order and return the first non-`None` body
 `Blob`, or `None` when nothing serves it. Resolution is **demand-driven**: when
-the next fetcher needs an identifier `article_ids` lacks, `resolver` is invoked
-**once** (memoised) to enrich the bundle, then the walk continues. `fetchers`
-defaults to [`default_fetchers()`](#default_fetchers). The blob carries raw
-bytes — rendering (e.g. XML → markdown) is the caller's concern.
+the next fetcher needs a resolvable identifier (`pmid`, `pmcid`, `doi`; see
+[`ArticleIds`](#articleids)) that `article_ids` lacks, `resolver` is invoked
+**once** (memoised) to enrich the bundle, then the walk continues; a fetcher
+whose requirement is still unmet is skipped. `fetchers` defaults to
+[`default_fetchers()`](#default_fetchers). The blob carries raw bytes —
+rendering (e.g. XML → markdown) is the caller's concern.
 
 ### `Fetcher` protocol
 
@@ -79,13 +91,15 @@ class Fetcher(Protocol):
 ```
 
 `requires` names the `ArticleIds` fields the fetcher needs to act; `fetch_body`
-skips a fetcher (or runs the resolver) until they are present. Return the body
-`Blob` or `None` if this source can't serve the article.
+runs the resolver when a resolvable one is missing and skips the fetcher while
+any is absent. Return the body `Blob` or `None` if this source can't serve the
+article.
 
 ### Bundled fetchers
 
 | Class | `name` | `requires` | Source |
 | --- | --- | --- | --- |
+| `EuropePmcBookshelfFetcher()` | `europe_pmc_bookshelf` | `{'bookid'}` | Europe PMC REST (`/{bookid}/bookXML`): an NCBI Bookshelf book part as BITS, served as `JATS_XML`; a miss is a 200 `<fullTextXMLBean>` envelope and declines; a `bookid` not of the form `NBK<digits>` raises `ValueError` |
 | `PmcOaFetcher()` | `pmc_oa_s3` | `{'pmcid'}` | PMC Open Access S3 bucket (JATS body; also backs the file-set) |
 | `EuropePmcFetcher()` | `europe_pmc` | `{'pmcid'}` | Europe PMC REST (`/{pmcid}/fullTextXML`) |
 | `ElsevierFetcher()` | `elsevier_oa` | `{'doi'}` | Elsevier article TDM API (needs `elsevier_api_key`); Crossref locates the XML link |
@@ -101,10 +115,13 @@ skips a fetcher (or runs the resolver) until they are present. Return the body
 def default_fetchers() -> tuple[Fetcher, ...]
 ```
 
-The production ladder in priority order: `PmcOaFetcher`, `EuropePmcFetcher`,
-`ElsevierFetcher`, `SpringerFetcher`. A function (not a module constant) so
-callers can prepend their own fetchers without import-time side effects. A
-publisher fetcher with no matching credential is a no-op.
+The production ladder in priority order: `EuropePmcBookshelfFetcher`,
+`PmcOaFetcher`, `EuropePmcFetcher`, `ElsevierFetcher`, `SpringerFetcher`. The
+Bookshelf rung heads it because a present `bookid` is decisive (a book part has
+no PMCID) and costs one GET, so a bundle carrying one is never spent on PMC rungs
+or a resolver call first. A function (not a module constant) so callers can
+prepend their own fetchers without import-time side effects. A publisher fetcher
+with no matching credential is a no-op.
 
 ## The file-set
 
@@ -223,8 +240,9 @@ resolver holds no client of its own.
 def chain(*resolvers: Resolver) -> Resolver
 ```
 
-Compose resolvers into one, run in order, stopping early once all three
-identifiers are known. Put your own resolver first, fallbacks after.
+Compose resolvers into one, run in order, stopping early once `pmid`, `pmcid`,
+and `doi` — the resolvable identifiers (see [`ArticleIds`](#articleids)) — are
+all known. Put your own resolver first, fallbacks after.
 
 ### `default_resolver`
 
@@ -294,15 +312,17 @@ repeats. The failure signal rides this tuple, so `ArticleIds` stays `str | None`
 (an id is known or not — a lookup's outcome is not a property of the id).
 
 ```python
-def chain_batch(*resolvers: BatchResolver, required=('pmid', 'pmcid', 'doi')) -> BatchResolver
+def chain_batch(*resolvers: BatchResolver, required: Iterable[str] = litfetch.ids.RESOLVABLE) -> BatchResolver
 ```
 
 Composes batch resolvers, feeding each only the elements still missing a
 `required` field (the per-element analogue of `chain`'s early-stop). `required`
 is parameterizable: a caller resolving for the PMC ladder passes `('pmcid',)` so
-later resolvers don't chase a `doi`/`pmid` the ladder never keys on. An index is
-in the returned abandoned set iff the element is *still* incomplete on `required`
-and some resolver abandoned it; one a later resolver completed is dropped.
+later resolvers don't chase a `doi`/`pmid` the ladder never keys on. It may name
+only resolvable identifiers (see [`ArticleIds`](#articleids)); anything else
+raises `ValueError`. An index is in the returned abandoned set iff the element is
+*still* incomplete on `required` and some resolver abandoned it; one a later
+resolver completed is dropped.
 
 ```python
 def default_batch_resolver() -> BatchResolver
@@ -348,9 +368,11 @@ def extract_source_metadata(blob: Blob) -> SourceMetadata
 
 Read the licence *from the body bytes* — JATS `<permissions>/<license>` or
 Elsevier `<openaccessUserLicense>` — with `basis='artifact'` (authoritative for
-exactly those bytes). Returns an empty `SourceMetadata` (all `None`) for a media
-type that carries no licence (e.g. PDF) or when none is found. Synchronous — it
-parses bytes you already hold.
+exactly those bytes). A BITS `<book-part-wrapper>` (a Bookshelf book part) is
+read from the part's own `<book-part-meta>` first, then the book's
+`<book-meta>`, so the part's terms win over the book's. Returns an empty
+`SourceMetadata` (all `None`) for a media type that carries no licence (e.g.
+PDF) or when none is found. Synchronous — it parses bytes you already hold.
 
 ### `resolve_access`
 

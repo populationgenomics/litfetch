@@ -26,7 +26,6 @@ resolution is unchanged.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 
@@ -55,8 +54,6 @@ BatchResolver = Callable[
     [Sequence[ids.ArticleIds], _http.Http],
     Awaitable[tuple[Sequence[ids.ArticleIds], set[int]]],
 ]
-
-_ID_FIELDS = frozenset(field.name for field in dataclasses.fields(ids.ArticleIds))
 
 
 def _pmcid_with_prefix(value: str | None) -> str | None:
@@ -493,13 +490,13 @@ def chain(*resolvers: Resolver) -> Resolver:
     """Compose resolvers into one, run in order until the bundle is complete.
 
     Each resolver enriches the bundle in turn; the chain stops early once every
-    identifier (``pmid``, ``pmcid``, ``doi``) is known, so later resolvers run
-    only while there is still something to find.
+    resolvable identifier (:data:`~litfetch.ids.RESOLVABLE`) is known, so later
+    resolvers run only while there is still something to find.
     """
 
     async def _run(article_ids: ids.ArticleIds, http: _http.Http) -> ids.ArticleIds:
         for resolver in resolvers:
-            if article_ids.pmid and article_ids.pmcid and article_ids.doi:
+            if article_ids.has(ids.RESOLVABLE):
                 break
             article_ids = article_ids.merge(await resolver(article_ids, http))
         return article_ids
@@ -520,7 +517,7 @@ def default_resolver() -> Resolver:
 
 def chain_batch(
     *resolvers: BatchResolver,
-    required: Iterable[str] = ('pmid', 'pmcid', 'doi'),
+    required: Iterable[str] = ids.RESOLVABLE,
 ) -> BatchResolver:
     """Compose batch resolvers, each fed only the elements still missing a ``required`` field.
 
@@ -532,7 +529,9 @@ def chain_batch(
 
     ``required`` is parameterizable because a caller resolving for the PMC ladder
     needs only ``pmcid``; forcing all three would spend calls chasing a
-    ``doi``/``pmid`` the ladder never keys on.
+    ``doi``/``pmid`` the ladder never keys on.  It may name only resolvable
+    identifiers (:data:`~litfetch.ids.RESOLVABLE`): a field no resolver supplies
+    would keep every element pending and run every resolver for nothing.
 
     The returned abandoned set holds an index iff the element is *still*
     incomplete on ``required`` **and** some resolver abandoned it after
@@ -549,15 +548,18 @@ def chain_batch(
         A :data:`BatchResolver` over the composed chain.
 
     Raises:
-        ValueError: If ``required`` is empty or names a field that is not an
-            :class:`~litfetch.ids.ArticleIds` identifier.
+        ValueError: If ``required`` is empty or names anything outside
+            :data:`~litfetch.ids.RESOLVABLE`.
     """
     required = tuple(required)
     if not required:
         raise ValueError('required must name at least one identifier field')
-    unknown = set(required) - _ID_FIELDS
-    if unknown:
-        raise ValueError(f'required names unknown identifier field(s): {sorted(unknown)}')
+    unresolvable = set(required) - ids.RESOLVABLE
+    if unresolvable:
+        raise ValueError(
+            f'required names identifier(s) no resolver supplies: {sorted(unresolvable)}; '
+            f'resolvable: {sorted(ids.RESOLVABLE)}'
+        )
 
     async def _run(
         article_ids: Sequence[ids.ArticleIds], http: _http.Http

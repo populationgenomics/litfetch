@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 
 import httpx2
@@ -178,6 +179,15 @@ async def test_fetch_body_skips_unsatisfied_fetchers_without_resolver() -> None:
     assert f.calls == []
 
 
+async def test_resolver_not_called_for_a_requirement_no_resolver_supplies() -> None:
+    # A missing bookid is not a reason to resolve: nothing in RESOLVABLE is wanted.
+    resolver = _SpyResolver(ids.ArticleIds(pmcid='PMCx'))
+    f = _FakeFetcher('needs_bookid', blob=_ok('needs_bookid'), requires=frozenset({'bookid'}))
+    assert await sessions.fetch_body(ids.ArticleIds(pmid='1'), resolver=resolver, fetchers=(f,)) is None
+    assert resolver.calls == 0
+    assert f.calls == []
+
+
 async def test_default_dispatcher_returns_pmc_oa_end_to_end(patch_transport: conftest.InstallTransport) -> None:
     patch_transport({f'GET {_xml_path("9", 1)}': [httpx2.Response(200, content=conftest.MINIMAL_JATS)]})
     blob = await sessions.fetch_body(ids.ArticleIds(pmcid='PMC9'))
@@ -186,12 +196,26 @@ async def test_default_dispatcher_returns_pmc_oa_end_to_end(patch_transport: con
 
 
 def test_default_fetchers_order() -> None:
-    assert [f.name for f in fetchers.default_fetchers()] == ['pmc_oa_s3', 'europe_pmc', 'elsevier_oa', 'springer_oa']
+    assert [f.name for f in fetchers.default_fetchers()] == [
+        'europe_pmc_bookshelf',
+        'pmc_oa_s3',
+        'europe_pmc',
+        'elsevier_oa',
+        'springer_oa',
+    ]
 
 
 # --- Europe PMC ----------------------------------------------------------
 
 _EPMC_FT_PATH = '/europepmc/webservices/rest/PMC9/fullTextXML'
+# Europe PMC's answer for an id it has no copy of: HTTP 200 with this envelope (the article
+# endpoint 404s instead; the book endpoint only ever does this).
+_EPMC_MISS_BEAN = (
+    b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    b'<fullTextXMLBean><fullTextXML><pmId>NBK999999999</pmId>'
+    b'<message>Article is not either Open Access article or a valid NBK/PM ID</message>'
+    b'<isOpenAccess>N</isOpenAccess></fullTextXML></fullTextXMLBean>'
+)
 
 
 async def test_europe_pmc_fetches_for_known_pmcid(patch_transport: conftest.InstallTransport) -> None:
@@ -205,6 +229,151 @@ async def test_europe_pmc_fetches_for_known_pmcid(patch_transport: conftest.Inst
 
 async def test_europe_pmc_short_circuits_without_pmcid() -> None:
     assert await _fetch(fetchers.EuropePmcFetcher(), ids.ArticleIds(pmid='9'), credentials=None) is None
+
+
+async def test_europe_pmc_returns_none_on_404(patch_transport: conftest.InstallTransport) -> None:
+    patch_transport({f'GET {_EPMC_FT_PATH}': [httpx2.Response(404)]})
+    assert await _fetch(fetchers.EuropePmcFetcher(), ids.ArticleIds(pmcid='PMC9')) is None
+
+
+# --- Europe PMC Bookshelf ------------------------------------------------
+
+_BOOKID = 'NBK1247'
+_EPMC_BOOK_URL = f'{fetchers._EUROPE_PMC_BASE}/{_BOOKID}/bookXML'
+_EPMC_BOOK_PATH = f'/europepmc/webservices/rest/{_BOOKID}/bookXML'
+_NON_ASCII_DIGITS = 'NBK\u0661\u0662'  # Arabic-Indic digits: a Unicode-aware digit class would accept them
+_KELVIN_K = 'NB\u212a1247'  # U+212A KELVIN SIGN: Unicode case-folding maps it onto K
+
+
+def test_bookshelf_fetcher_requires_only_bookid() -> None:
+    assert fetchers.EuropePmcBookshelfFetcher.requires == frozenset({'bookid'})
+
+
+async def test_bookshelf_fetches_for_known_bookid(patch_transport: conftest.InstallTransport) -> None:
+    transport = patch_transport({f'GET {_EPMC_BOOK_PATH}': [httpx2.Response(200, content=conftest.MINIMAL_BITS)]})
+    blob = await _fetch(fetchers.EuropePmcBookshelfFetcher(), ids.ArticleIds(bookid=_BOOKID))
+    assert blob is not None
+    assert blob.file.kind is artifacts.FileKind.BODY
+    assert blob.file.source == 'europe_pmc_bookshelf'
+    assert blob.file.media_type == artifacts.JATS_XML
+    assert blob.file.uri == _EPMC_BOOK_URL
+    assert blob.content == conftest.MINIMAL_BITS
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.parametrize('raw', ['nbk1247', ' NBK1247 ', 'Nbk1247'])
+async def test_bookshelf_normalises_bookid_into_url(patch_transport: conftest.InstallTransport, raw: str) -> None:
+    # The transport is keyed on the canonical path: an un-normalised id would be an unexpected request.
+    transport = patch_transport({f'GET {_EPMC_BOOK_PATH}': [httpx2.Response(200, content=conftest.MINIMAL_BITS)]})
+    blob = await _fetch(fetchers.EuropePmcBookshelfFetcher(), ids.ArticleIds(bookid=raw))
+    assert blob is not None
+    assert blob.file.uri == _EPMC_BOOK_URL
+    assert transport.calls[0][1] == _EPMC_BOOK_URL
+
+
+@pytest.mark.parametrize(
+    'raw', ['1247', 'NBK', 'NBKx1', 'PMC1247', 'NBK1247/../PMC9', 'NBK1247?x=1', _NON_ASCII_DIGITS, _KELVIN_K]
+)
+async def test_bookshelf_rejects_malformed_bookid(patch_transport: conftest.InstallTransport, raw: str) -> None:
+    patch_transport({})  # any request is unexpected: the id is refused before a URL is built
+    with pytest.raises(ValueError, match='Bookshelf accession'):
+        await _fetch(fetchers.EuropePmcBookshelfFetcher(), ids.ArticleIds(bookid=raw))
+
+
+@pytest.mark.parametrize(
+    ('fetcher', 'article_ids', 'path'),
+    [
+        (fetchers.EuropePmcBookshelfFetcher(), ids.ArticleIds(bookid=_BOOKID), _EPMC_BOOK_PATH),
+        (fetchers.EuropePmcFetcher(), ids.ArticleIds(pmcid='PMC9'), _EPMC_FT_PATH),
+    ],
+)
+async def test_europe_pmc_declines_a_miss_envelope(
+    patch_transport: conftest.InstallTransport, fetcher: fetchers.Fetcher, article_ids: ids.ArticleIds, path: str
+) -> None:
+    # A 200 whose body is the <fullTextXMLBean> message is "no copy", not a body to hand on.
+    patch_transport({f'GET {path}': [httpx2.Response(200, content=_EPMC_MISS_BEAN)]})
+    assert await _fetch(fetcher, article_ids) is None
+
+
+async def test_bookshelf_returns_none_on_empty_body(patch_transport: conftest.InstallTransport) -> None:
+    patch_transport({f'GET {_EPMC_BOOK_PATH}': [httpx2.Response(200, content=b'')]})
+    assert await _fetch(fetchers.EuropePmcBookshelfFetcher(), ids.ArticleIds(bookid=_BOOKID)) is None
+
+
+async def test_bookshelf_short_circuits_without_bookid(patch_transport: conftest.InstallTransport) -> None:
+    patch_transport({})  # any request is unexpected
+    assert await _fetch(fetchers.EuropePmcBookshelfFetcher(), ids.ArticleIds(pmcid='PMC9')) is None
+
+
+async def test_europe_pmc_warns_on_unexpected_status(
+    patch_transport: conftest.InstallTransport, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Neither a hit nor a "no copy" 404: the fetcher still declines, but says why.
+    patch_transport({f'GET {_EPMC_BOOK_PATH}': [httpx2.Response(403)]})
+    with caplog.at_level(logging.WARNING, logger='litfetch.fetchers'):
+        blob = await _fetch(fetchers.EuropePmcBookshelfFetcher(), ids.ArticleIds(bookid=_BOOKID))
+    assert blob is None
+    assert 'Unexpected status 403' in caplog.text
+    assert _EPMC_BOOK_URL in caplog.text
+
+
+async def test_ladder_skips_bookshelf_without_bookid(patch_transport: conftest.InstallTransport) -> None:
+    patch_transport({})  # any request is unexpected
+    blob = await sessions.fetch_body(ids.ArticleIds(pmid='9'), fetchers=[fetchers.EuropePmcBookshelfFetcher()])
+    assert blob is None
+
+
+async def test_default_ladder_serves_bookshelf_book_part(patch_transport: conftest.InstallTransport) -> None:
+    patch_transport({f'GET {_EPMC_BOOK_PATH}': [httpx2.Response(200, content=conftest.MINIMAL_BITS)]})
+    blob = await sessions.fetch_body(ids.ArticleIds(bookid=_BOOKID))
+    assert blob is not None
+    assert blob.file.source == 'europe_pmc_bookshelf'
+
+
+def _pmc_rungs_decline() -> dict[str, list[httpx2.Response]]:
+    """Scripts under which every PMC rung of the default ladder 404s for PMC9."""
+    scripts = {f'GET {_xml_path("9", v)}': [httpx2.Response(404)] for v in range(1, fetchers._PMC_OA_MAX_VERSION + 1)}
+    scripts[f'GET {_EPMC_FT_PATH}'] = [httpx2.Response(404)]
+    return scripts
+
+
+async def test_default_ladder_serves_bookshelf_first_without_resolving(
+    patch_transport: conftest.InstallTransport,
+) -> None:
+    # A present bookid is decisive: one GET, no PMC rung, and no resolver call chasing a PMCID.
+    transport = patch_transport({f'GET {_EPMC_BOOK_PATH}': [httpx2.Response(200, content=conftest.MINIMAL_BITS)]})
+    resolver = _SpyResolver(ids.ArticleIds(pmcid='PMC9'))
+    blob = await sessions.fetch_body(ids.ArticleIds(pmid='9', bookid=_BOOKID), resolver=resolver)
+    assert blob is not None
+    assert blob.file.source == 'europe_pmc_bookshelf'
+    assert resolver.calls == 0
+    assert [key for key, _url, _body in transport.calls] == [f'GET {_EPMC_BOOK_PATH}']
+
+
+async def test_default_ladder_falls_through_to_pmc_when_bookshelf_declines(
+    patch_transport: conftest.InstallTransport,
+) -> None:
+    transport = patch_transport(
+        {
+            f'GET {_EPMC_BOOK_PATH}': [httpx2.Response(200, content=_EPMC_MISS_BEAN)],
+            f'GET {_xml_path("9", 1)}': [httpx2.Response(200, content=conftest.MINIMAL_JATS)],
+        }
+    )
+    blob = await sessions.fetch_body(ids.ArticleIds(pmcid='PMC9', bookid=_BOOKID))
+    assert blob is not None
+    assert blob.file.source == 'pmc_oa_s3'
+    assert transport.calls[0][0] == f'GET {_EPMC_BOOK_PATH}'
+
+
+async def test_default_ladder_never_resolves_for_a_bookshelf_only_gap(
+    patch_transport: conftest.InstallTransport,
+) -> None:
+    # pmcid and doi are known, so the Bookshelf rung's unmet bookid must not cost a resolver call.
+    patch_transport(_pmc_rungs_decline())
+    resolver = _SpyResolver(ids.ArticleIds(pmid='1'))
+    blob = await sessions.fetch_body(ids.ArticleIds(pmcid='PMC9', doi=_DOI), resolver=resolver)
+    assert blob is None
+    assert resolver.calls == 0
 
 
 # --- bioRxiv / medRxiv (opt-in) ------------------------------------------

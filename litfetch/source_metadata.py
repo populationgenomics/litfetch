@@ -17,12 +17,17 @@ Both return the licence *raw*; mapping to an SPDX id is the consumer's.
 from __future__ import annotations
 
 import logging
+import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 
 import defusedxml.ElementTree
 
 from litfetch import _http, artifacts, ids, unpaywall
 
 logger = logging.getLogger(__name__)
+
+# Child paths from a <book-part-wrapper> root to each <permissions>, most specific first.
+_BOOK_PART_PERMISSIONS = (('book-part', 'book-part-meta', 'permissions'), ('book-meta', 'permissions'))
 
 
 def _localname(tag: str) -> str:
@@ -51,13 +56,47 @@ def _from_jats(content: bytes) -> artifacts.SourceMetadata:
     Prefers the ``xlink:href`` (the canonical CC URL), then ``license-type``,
     then the licence paragraph text.  ``access`` is flagged open only when the
     ``license-type`` itself says so -- OA status proper comes from an authority.
+
+    A BITS ``<book-part-wrapper>`` (an NCBI Bookshelf book part) is read from
+    the part's own ``<book-part-meta>`` first, then the enclosing
+    ``<book-meta>``, so the part's terms win over the book's; a
+    ``<permissions>`` anywhere else in the part (a figure's, say) states no
+    terms for the part itself.  Any other root is searched whole, in document
+    order.
     """
     try:
         root = defusedxml.ElementTree.fromstring(content)
     except Exception:
         logger.exception('JATS source-metadata parse failed')
         return artifacts.SourceMetadata()
-    for el in root.iter():
+    for scope in _licence_scopes(root):
+        meta = _first_licence(scope)
+        if meta is not None:
+            return meta
+    return artifacts.SourceMetadata()
+
+
+def _licence_scopes(root: ET.Element) -> list[ET.Element]:
+    """Return the subtrees whose ``<license>`` states the article's own terms, most specific first."""
+    if _localname(root.tag) != 'book-part-wrapper':
+        return [root]
+    scopes = (_child_path(root, path) for path in _BOOK_PART_PERMISSIONS)
+    return [scope for scope in scopes if scope is not None]
+
+
+def _child_path(el: ET.Element, names: Iterable[str]) -> ET.Element | None:
+    """Descend from ``el`` through the direct children named in ``names``; ``None`` when a step is absent."""
+    for name in names:
+        found = next((child for child in el if _localname(child.tag) == name), None)
+        if found is None:
+            return None
+        el = found
+    return el
+
+
+def _first_licence(scope: ET.Element) -> artifacts.SourceMetadata | None:
+    """Return the terms of the first ``<license>`` under ``scope`` that states any, else ``None``."""
+    for el in scope.iter():
         if _localname(el.tag) != 'license':
             continue
         href = next((v for k, v in el.attrib.items() if _localname(k) == 'href'), None)
@@ -67,7 +106,7 @@ def _from_jats(content: bytes) -> artifacts.SourceMetadata:
         access = 'open-access' if license_type and 'open' in license_type.lower() else None
         if licence or access:
             return artifacts.SourceMetadata(licence=licence, access=access, basis='artifact')
-    return artifacts.SourceMetadata()
+    return None
 
 
 def _from_elsevier(content: bytes) -> artifacts.SourceMetadata:

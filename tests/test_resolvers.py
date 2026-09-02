@@ -224,9 +224,12 @@ async def test_chain_batch_rejects_empty_required() -> None:
         resolvers.chain_batch(required=())
 
 
-async def test_chain_batch_rejects_unknown_required_field() -> None:
-    with pytest.raises(ValueError, match='unknown identifier'):
-        resolvers.chain_batch(required=('pmid', 'issn'))
+@pytest.mark.parametrize('required', [('pmid', 'issn'), ('bookid',), ('pmcid', 'bookid')])
+async def test_chain_batch_rejects_a_field_no_resolver_supplies(required: tuple[str, ...]) -> None:
+    # An unknown field and a real-but-unresolvable one are refused alike: either would keep every
+    # element pending and run each resolver for nothing.
+    with pytest.raises(ValueError, match='no resolver supplies'):
+        resolvers.chain_batch(required=required)
 
 
 # --- _run_chunked / abandonment ------------------------------------------

@@ -25,6 +25,27 @@ MINIMAL_JATS = b"""<?xml version='1.0'?>
 </article>
 """
 
+# A BITS book part (the Bookshelf payload shape, DOCTYPE as served): book metadata, then the part.
+MINIMAL_BITS = b"""<?xml version='1.0'?>
+<!DOCTYPE book-part-wrapper PUBLIC "-//NLM//DTD BITS Book Interchange DTD v2.0 20151225//EN" "BITS-book2.dtd">
+<book-part-wrapper xmlns:xlink="http://www.w3.org/1999/xlink" content-type="chapter">
+  <book-meta>
+    <book-title-group><book-title>A short book</book-title></book-title-group>
+  </book-meta>
+  <book-part book-part-type="chapter">
+    <book-part-meta>
+      <title-group><title>A short chapter</title></title-group>
+    </book-part-meta>
+    <body>
+      <sec>
+        <title>Intro</title>
+        <p>Hello world.</p>
+      </sec>
+    </body>
+  </book-part>
+</book-part-wrapper>
+"""
+
 
 class RecordingTransport(httpx2.AsyncBaseTransport):
     """Drive a scripted sequence of responses keyed by ``METHOD path``."""
