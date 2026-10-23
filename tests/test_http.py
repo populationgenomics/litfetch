@@ -101,3 +101,16 @@ def test_retry_policy_rejects_non_positive_attempts(max_attempts: int) -> None:
 def test_retry_after_seconds(header: dict[str, str], expected: float | None) -> None:
     resp = httpx2.Response(503, headers=header)
     assert _http._retry_after_seconds(resp) == expected
+
+
+@pytest.mark.parametrize(
+    ('text', 'expected'),
+    [
+        ('https://h/works?api_key=s3cr3t', 'https://h/works?api_key=REDACTED'),
+        ('https://h/works?api_key=s3cr3t&mailto=x', 'https://h/works?api_key=REDACTED&mailto=x'),
+        ("GET 'https://h/?a=1&api_key=s3cr3t' 200", "GET 'https://h/?a=1&api_key=REDACTED' 200"),
+        ('https://h/works?mailto=x', 'https://h/works?mailto=x'),
+    ],
+)
+def test_redact_masks_api_key_value(text: str, expected: str) -> None:
+    assert _http.redact(text) == expected

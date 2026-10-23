@@ -440,16 +440,36 @@ def _openalex_last_segment(value: object) -> str | None:
 class OpenAlexResolver:
     """Resolve ``doi -> pmid``/``pmcid`` via OpenAlex's works endpoint.
 
-    Batch, keyless, and strictly id->id: the works filter takes a
-    ``doi:<a>|<b>|...`` OR-list and each work's ``ids`` carries its pmid/pmcid, so
-    one request maps up to 50 DOIs.  ``select`` is restricted to the id fields, so
-    no bibliographic record crosses litfetch's id surface.  It covers the
-    doi-bearing papers NCBI could not route (a DOI in PubMed-but-not-PMC, or not
-    in PubMed).  The session ``contact`` is sent as ``mailto`` (the polite-pool
-    parameter), omitted when unset.
+    Batch and strictly id->id: the works filter takes a ``doi:<a>|<b>|...``
+    OR-list and each work's ``ids`` carries its pmid/pmcid, so one request maps up
+    to 50 DOIs.  ``select`` is restricted to the id fields, so no bibliographic
+    record crosses litfetch's id surface.  It covers the doi-bearing papers NCBI
+    could not route (a DOI in PubMed-but-not-PMC, or not in PubMed).  The session
+    ``contact`` is sent as ``mailto`` (the polite-pool parameter), omitted when
+    unset.
+
+    ``api_key`` is optional.  Without one, requests draw on OpenAlex's keyless
+    allowance, a small daily budget shared by every caller on the same IP
+    address; with one, every request carries it as the ``api_key`` query
+    parameter and draws on that key's own budget.  The key is masked in httpx2's
+    request log line (see :func:`litfetch._http.redact`).
     """
 
     _CAP = 50
+
+    def __init__(self, *, api_key: str | None = None) -> None:
+        """Configure the resolver.
+
+        Args:
+            api_key: An OpenAlex API key, or ``None`` to ask without one.
+
+        Raises:
+            ValueError: If ``api_key`` is empty or holds whitespace (a key read
+                with its trailing newline, say).
+        """
+        if api_key is not None and (not api_key or any(c.isspace() for c in api_key)):
+            raise ValueError('an OpenAlex API key is a non-empty token with no whitespace')
+        self._api_key = api_key
 
     async def __call__(
         self, article_ids: Sequence[ids.ArticleIds], http: _http.Http
@@ -468,6 +488,8 @@ class OpenAlexResolver:
         }
         if http.contact:
             params['mailto'] = http.contact
+        if self._api_key is not None:
+            params[_http.API_KEY_PARAM] = self._api_key
         data = await _get_json_or_abandon(
             http, _OPENALEX_WORKS, params=params, context='OpenAlex works', rate=_http.Rate.OPENALEX
         )
@@ -584,18 +606,27 @@ def chain_batch(
     return _run
 
 
-def default_batch_resolver() -> BatchResolver:
-    """Build a batteries-included, keyless batch resolver chain.
+def default_batch_resolver(*, openalex_api_key: str | None = None) -> BatchResolver:
+    """Build a batteries-included batch resolver chain, keyless unless given an OpenAlex key.
 
     NCBI's ID Converter batch (any scheme, one auto-detecting call), then Europe
     PMC batch (the UKPMC-only ``pmid -> pmcid`` NCBI lacks), then OpenAlex (the
-    doi-bearing papers NCBI could not route) -- all auth-free.  The symmetric
-    batch analogue of :func:`default_resolver`, reaching the same coverage so a
-    caller can pre-pass a whole corpus and then fetch each body with an
-    already-complete bundle.  Add a keyed resolver to the :func:`chain_batch` for
-    broader coverage.
+    doi-bearing papers NCBI could not route) -- all usable without a key.  The
+    symmetric batch analogue of :func:`default_resolver`, reaching the same
+    coverage so a caller can pre-pass a whole corpus and then fetch each body
+    with an already-complete bundle.  Add a keyed resolver to the
+    :func:`chain_batch` for broader coverage.
+
+    Args:
+        openalex_api_key: Passed to :class:`OpenAlexResolver`; ``None`` keeps
+            its requests on OpenAlex's keyless allowance.
+
+    Raises:
+        ValueError: If ``openalex_api_key`` is empty or holds whitespace.
     """
-    return chain_batch(NcbiIdConverterBatchResolver(), EuropePmcBatchResolver(), OpenAlexResolver())
+    return chain_batch(
+        NcbiIdConverterBatchResolver(), EuropePmcBatchResolver(), OpenAlexResolver(api_key=openalex_api_key)
+    )
 
 
 def _idconv_query(article_ids: ids.ArticleIds) -> tuple[str, str] | None:

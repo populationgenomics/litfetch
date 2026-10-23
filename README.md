@@ -112,6 +112,10 @@ comes from a session `contact`, not a hardcoded default — set it on the sessio
 `default_resolver()` is a batteries-included, keyless chain
 (Europe PMC search + NCBI ID Converter).
 
+An API key that a host takes as an `api_key` query parameter (OpenAlex,
+Springer) is masked in httpx2's request log line; importing litfetch installs
+that filter on the `httpx2` logger.
+
 ### No resolver — you already hold the IDs
 
 A non-PubMed paper you only have a DOI for, plus your own Elsevier key:
