@@ -11,6 +11,11 @@ Keeping these here (and not in :mod:`litfetch.sessions`) lets ``fetchers`` and
 exponential backoff and honours a 429/503 ``Retry-After``.  It operates over a
 raw client and knows nothing of pacing or caching; :class:`Session` layers those
 on top and is the concrete :class:`Http` fetchers and resolvers actually call.
+
+Some hosts (OpenAlex, Springer) take their API key as an ``api_key`` query
+parameter, so the key is part of every request URL.  :func:`redact` masks it in
+text, and importing this module installs a filter on the ``httpx2`` logger that
+applies it to httpx2's per-request INFO line.
 """
 
 from __future__ import annotations
@@ -19,7 +24,9 @@ import asyncio
 import dataclasses
 import enum
 import importlib.metadata
+import logging
 import random
+import re
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -34,6 +41,31 @@ USER_AGENT = f'litfetch/{importlib.metadata.version("litfetch")}'
 # Status codes worth retrying: 429 (rate limited) and the transient 5xx family.
 # A 4xx other than 429 is the caller's fault and will not fix itself on retry.
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+API_KEY_PARAM = 'api_key'
+_REDACTED = 'REDACTED'
+# The value runs to the next parameter, quote or whitespace.
+_API_KEY_IN_TEXT = re.compile(rf'({API_KEY_PARAM}=)[^&\s\'"]*')
+
+
+def redact(text: str) -> str:
+    """Return ``text`` with the value of every ``api_key=`` query parameter replaced by ``REDACTED``."""
+    return _API_KEY_IN_TEXT.sub(rf'\g<1>{_REDACTED}', text)
+
+
+class _RedactingFilter(logging.Filter):
+    """Rewrite a record whose message quotes an ``api_key`` parameter, so no handler formats the key."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = redact(message)
+        if redacted != message:
+            record.msg, record.args = redacted, None
+        return True
+
+
+# httpx2 logs every request URL, query included, at INFO on this exact logger.
+logging.getLogger('httpx2').addFilter(_RedactingFilter())
 
 
 class Rate(enum.Enum):

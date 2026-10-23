@@ -325,12 +325,13 @@ raises `ValueError`. An index is in the returned abandoned set iff the element i
 resolver completed is dropped.
 
 ```python
-def default_batch_resolver() -> BatchResolver
+def default_batch_resolver(*, openalex_api_key=None) -> BatchResolver
 ```
 
-The batteries-included keyless chain, symmetric with `default_resolver` and
-reaching the same coverage: `NcbiIdConverterBatchResolver` →
-`EuropePmcBatchResolver` → `OpenAlexResolver`.
+The batteries-included chain, symmetric with `default_resolver` and reaching the
+same coverage: `NcbiIdConverterBatchResolver` → `EuropePmcBatchResolver` →
+`OpenAlexResolver`. Keyless unless `openalex_api_key` is given, which goes to
+`OpenAlexResolver(api_key=...)`.
 
 ```python
 NcbiIdConverterBatchResolver(*, tool='litfetch')
@@ -342,10 +343,13 @@ EuropePmcBatchResolver()
 # pmid -> pmcid, OR-ing each 100-pmid chunk into one EXT_ID search. Covers the
 # UKPMC-only PMC ids NCBI lacks — why the batch chain reaches per-item parity.
 
-OpenAlexResolver()
+OpenAlexResolver(*, api_key=None)
 # doi -> pmid/pmcid via the works filter, 50 DOIs/call, id-only (no bibliographic
 # record). Covers the doi-bearing papers NCBI could not route. The session
-# contact is sent as mailto (polite pool); paces at Rate.OPENALEX.
+# contact is sent as mailto (polite pool); paces at Rate.OPENALEX. Without a key,
+# requests share OpenAlex's small per-IP keyless daily budget; a key is sent as
+# the api_key query parameter and draws on its own budget. Raises ValueError on
+# an empty key or one holding whitespace.
 ```
 
 Each dedups repeated ids on the wire (one lookup per distinct id, fanned back to
