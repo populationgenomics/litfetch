@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import httpx2
 import pytest
 
@@ -439,6 +441,80 @@ async def test_openalex_resolver_leaves_unknown_doi_unenriched(patch_transport: 
     assert abandoned == set()
 
 
+_OPENALEX_KEY = 'oa-test-key-123'
+
+
+async def test_openalex_resolver_sends_api_key_when_given(patch_transport: conftest.InstallTransport) -> None:
+    transport = patch_transport({f'GET {_OPENALEX_PATH}': [httpx2.Response(200, json={'results': []})]})
+    async with sessions.Session() as s:
+        await resolvers.OpenAlexResolver(api_key=_OPENALEX_KEY)([ids.ArticleIds(doi=_DOI)], s)
+    assert httpx2.URL(transport.calls[0][1]).params['api_key'] == _OPENALEX_KEY
+
+
+async def test_openalex_resolver_sends_no_api_key_by_default(patch_transport: conftest.InstallTransport) -> None:
+    transport = patch_transport({f'GET {_OPENALEX_PATH}': [httpx2.Response(200, json={'results': []})]})
+    async with sessions.Session() as s:
+        await resolvers.OpenAlexResolver()([ids.ArticleIds(doi=_DOI)], s)
+    assert 'api_key' not in httpx2.URL(transport.calls[0][1]).params
+
+
+@pytest.mark.parametrize('bad_key', ['', ' ', 'key\n', 'a key'])
+def test_openalex_resolver_rejects_malformed_api_key(bad_key: str) -> None:
+    with pytest.raises(ValueError, match='non-empty token'):
+        resolvers.OpenAlexResolver(api_key=bad_key)
+
+
+def test_openalex_resolver_repr_omits_api_key() -> None:
+    assert _OPENALEX_KEY not in repr(resolvers.OpenAlexResolver(api_key=_OPENALEX_KEY))
+
+
+def _failing_openalex(failure: httpx2.Response | type[httpx2.TransportError]) -> httpx2.MockTransport:
+    """A transport whose every request fails; a transport error quotes the full request URL, key included."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if isinstance(failure, httpx2.Response):
+            return failure
+        raise failure(f'failed: {request.url}', request=request)
+
+    return httpx2.MockTransport(handler)
+
+
+@pytest.mark.parametrize(
+    ('failure', 'abandoned_expected'),
+    [
+        (httpx2.Response(403), set()),  # definitive: logged as a dead end
+        (httpx2.Response(503), {0}),  # survived retries: abandoned
+        (httpx2.ConnectError, {0}),  # transport failure: abandoned
+    ],
+)
+async def test_openalex_resolver_keeps_api_key_out_of_logs_on_failure(
+    failure: httpx2.Response | type[httpx2.TransportError],
+    abandoned_expected: set[int],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = _failing_openalex(failure)
+    with caplog.at_level(logging.DEBUG):
+        async with sessions.Session(
+            client_factory=lambda: httpx2.AsyncClient(transport=transport),
+            retry=_http.RetryPolicy(max_attempts=1),
+        ) as s:
+            _, abandoned = await resolvers.OpenAlexResolver(api_key=_OPENALEX_KEY)([ids.ArticleIds(doi=_DOI)], s)
+    assert abandoned == abandoned_expected
+    assert any(r.name == 'litfetch.resolvers' for r in caplog.records)  # the failure was logged
+    assert _OPENALEX_KEY not in caplog.text
+
+
+async def test_httpx2_request_log_line_redacts_api_key(
+    patch_transport: conftest.InstallTransport, caplog: pytest.LogCaptureFixture
+) -> None:
+    patch_transport({f'GET {_OPENALEX_PATH}': [httpx2.Response(200, json={'results': []})]})
+    with caplog.at_level(logging.INFO, logger='httpx2'):
+        async with sessions.Session() as s:
+            await resolvers.OpenAlexResolver(api_key=_OPENALEX_KEY)([ids.ArticleIds(doi=_DOI)], s)
+    assert 'api_key=REDACTED' in caplog.text  # httpx2 logged the request, with the key masked
+    assert _OPENALEX_KEY not in caplog.text
+
+
 # --- Europe PMC batch resolver -------------------------------------------
 
 
@@ -533,3 +609,20 @@ async def test_default_batch_resolver_routes_across_all_three_sources(
         ids.ArticleIds(pmid='11', pmcid='PMC11', doi='10.9999/c'),
     ]
     assert abandoned == set()
+
+
+async def test_default_batch_resolver_passes_openalex_api_key(patch_transport: conftest.InstallTransport) -> None:
+    oa_doi = '10.5555/openalex'
+    transport = patch_transport(
+        {
+            f'GET {_IDCONV_PATH}': [
+                httpx2.Response(200, json={'records': [{'requested-id': oa_doi, 'status': 'error'}]})
+            ],
+            f'GET {_OPENALEX_PATH}': [httpx2.Response(200, json={'results': []})],
+        }
+    )
+    async with sessions.Session() as s:
+        await resolvers.default_batch_resolver(openalex_api_key=_OPENALEX_KEY)([ids.ArticleIds(doi=oa_doi)], s)
+    by_path = {key: httpx2.URL(url) for key, url, _ in transport.calls}
+    assert by_path[f'GET {_OPENALEX_PATH}'].params['api_key'] == _OPENALEX_KEY
+    assert 'api_key' not in by_path[f'GET {_IDCONV_PATH}'].params  # the key goes to OpenAlex only
