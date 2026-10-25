@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 import httpx2
@@ -112,5 +113,7 @@ def test_retry_after_seconds(header: dict[str, str], expected: float | None) -> 
         ('https://h/works?mailto=x', 'https://h/works?mailto=x'),
     ],
 )
-def test_redact_masks_api_key_value(text: str, expected: str) -> None:
-    assert _http.redact(text) == expected
+def test_the_httpx2_log_filter_masks_an_api_key_value(text: str, expected: str) -> None:
+    record = logging.LogRecord('httpx2', logging.INFO, __file__, 0, '%s', (text,), None)
+    assert _http._RedactingFilter().filter(record)
+    assert record.getMessage() == expected

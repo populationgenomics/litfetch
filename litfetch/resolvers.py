@@ -452,7 +452,7 @@ class OpenAlexResolver:
     allowance, a small daily budget shared by every caller on the same IP
     address; with one, every request carries it as the ``api_key`` query
     parameter and draws on that key's own budget.  The key is masked in httpx2's
-    request log line (see :func:`litfetch._http.redact`).
+    request log line.
     """
 
     _CAP = 50
@@ -489,7 +489,7 @@ class OpenAlexResolver:
         if http.contact:
             params['mailto'] = http.contact
         if self._api_key is not None:
-            params[_http.API_KEY_PARAM] = self._api_key
+            params['api_key'] = self._api_key
         data = await _get_json_or_abandon(
             http, _OPENALEX_WORKS, params=params, context='OpenAlex works', rate=_http.Rate.OPENALEX
         )
